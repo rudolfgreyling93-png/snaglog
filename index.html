@@ -4,6 +4,8 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>Site Inspection & Snag Report</title>
+<link rel="icon" href="assets/logo.png">
+<link rel="apple-touch-icon" href="assets/logo.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -98,6 +100,14 @@ const MAX_W = 1024;
 const JPEG_Q = 0.7;
 const MAX_DOCS = 10;
 const MAX_DOC_MB = 20;
+const COMPANY = {
+  name: 'INFRASTRUCTURE CONSULTING ENGINEERS cc',
+  addressLines: ['Crestway Office Park, Block D, 1st Floor', '20 Hotel Street', 'PO Box 186, Persequor Park, 0020'],
+  tel: '012 349 2022',
+  regNo: '1992/019030/23',
+  members: 'IM Moeti; SJ vd Hoven; TE Moeti; PG Joubert',
+  logo: 'assets/logo.png'
+};
 const DB_NAME = 'snaglog-db',
   STORE = 'reports',
   DB_VER = 1;
@@ -304,6 +314,10 @@ async function buildPDF(report, notify) {
     notify('PDF library failed to load (check network access to the CDN).', 'error');
     return null;
   }
+  let logoImg = null;
+  try {
+    logoImg = await urlToImage(COMPANY.logo);
+  } catch (e) {}
   const allPhotos = [];
   report.observations.forEach(o => (o.photos || []).forEach(p => allPhotos.push(p)));
   const imgDims = {};
@@ -338,14 +352,46 @@ async function buildPDF(report, notify) {
     }
   };
   const m = report.meta;
+  let logoH = 0;
+  if (logoImg) {
+    const targetH = 16;
+    const targetW = targetH * ((logoImg.naturalWidth || logoImg.width) / (logoImg.naturalHeight || logoImg.height));
+    try {
+      doc.addImage(logoImg, 'PNG', margin, y, targetW, targetH);
+      logoH = targetH;
+    } catch (e) {}
+  }
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.text(COMPANY.name, pageW - margin, y + 3, {
+    align: 'right'
+  });
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+  let addrY = y + 7;
+  COMPANY.addressLines.forEach(l => {
+    doc.text(l, pageW - margin, addrY, {
+      align: 'right'
+    });
+    addrY += 3.6;
+  });
+  doc.text('Tel: ' + COMPANY.tel, pageW - margin, addrY, {
+    align: 'right'
+  });
+  y += Math.max(logoH, addrY - y) + 4;
+  doc.setDrawColor(0);
+  doc.setLineWidth(0.6);
+  doc.line(margin, y, pageW - margin, y);
+  doc.setLineWidth(0.2);
+  y += 8;
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(18);
-  doc.text('SITE INSPECTION & SNAG REPORT', margin, y + 6);
-  y += 10;
+  doc.text('SITE INSPECTION & SNAG REPORT', margin, y);
+  y += 8;
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(11);
-  doc.text(m.projectName || 'Untitled project', margin, y + 3);
-  y += 9;
+  doc.text(m.projectName || 'Untitled project', margin, y);
+  y += 8;
   const rows = [['Project', m.projectName || '—', 'Date', m.date || '—'], ['Inspector', m.inspector || '—', 'Contractor', m.contractor || '—'], ['Client', m.client || '—']];
   const labelW = 26,
     valW = contentW / 2 - labelW;
@@ -519,6 +565,14 @@ async function buildPDF(report, notify) {
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(7.5);
     doc.setTextColor(110, 110, 110);
+    doc.setFontSize(6.5);
+    doc.text(`${COMPANY.name} — Reg No: ${COMPANY.regNo}`, pageW / 2, pageH - 13, {
+      align: 'center'
+    });
+    doc.text(`Members: ${COMPANY.members}`, pageW / 2, pageH - 10, {
+      align: 'center'
+    });
+    doc.setFontSize(7.5);
     doc.text(`Generated ${fmtDT(Date.now())}`, margin, pageH - 6);
     doc.text(`Page ${p} of ${pageCount}`, pageW - margin, pageH - 6, {
       align: 'right'
@@ -1313,7 +1367,37 @@ function PrintReport({
   const m = report.meta;
   return React.createElement("div", {
     className: "pr-wrap print-only"
-  }, React.createElement("h1", {
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: 12,
+      borderBottom: '2px solid #000',
+      paddingBottom: 8,
+      marginBottom: 10
+    }
+  }, React.createElement("img", {
+    src: COMPANY.logo,
+    alt: COMPANY.name,
+    style: {
+      height: 52,
+      width: 'auto'
+    }
+  }), React.createElement("div", {
+    style: {
+      textAlign: 'right',
+      fontSize: 10,
+      lineHeight: 1.4
+    }
+  }, React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      fontSize: 12
+    }
+  }, COMPANY.name), COMPANY.addressLines.map((l, i) => React.createElement("div", {
+    key: i
+  }, l)), React.createElement("div", null, "Tel: ", COMPANY.tel))), React.createElement("h1", {
     className: "font-head",
     style: {
       fontSize: 28,
@@ -1410,7 +1494,15 @@ function PrintReport({
       marginTop: 16,
       color: '#000'
     }
-  }, "Generated ", fmtDT(Date.now()), ". Severity colours shown as text in print for monochrome fidelity."));
+  }, "Generated ", fmtDT(Date.now()), ". Severity colours shown as text in print for monochrome fidelity."), React.createElement("div", {
+    style: {
+      fontSize: 8,
+      marginTop: 4,
+      color: '#000',
+      borderTop: '1px solid #000',
+      paddingTop: 4
+    }
+  }, COMPANY.name, " — Reg No: ", COMPANY.regNo, " — Members: ", COMPANY.members));
 }
 function App() {
   const [toastNode, notify] = useToast();
@@ -1611,7 +1703,22 @@ function App() {
       flexWrap: 'wrap',
       marginBottom: 14
     }
-  }, React.createElement("div", null, React.createElement("h1", {
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10
+    }
+  }, React.createElement("img", {
+    src: COMPANY.logo,
+    alt: COMPANY.name,
+    style: {
+      height: 42,
+      width: 'auto',
+      borderRadius: 4,
+      flexShrink: 0
+    }
+  }), React.createElement("div", null, React.createElement("h1", {
     className: "font-head",
     style: {
       fontSize: 30,
@@ -1627,7 +1734,7 @@ function App() {
       fontSize: 12,
       opacity: .6
     }
-  }, "Site inspection & defect register")), React.createElement("div", {
+  }, "Site inspection & defect register"))), React.createElement("div", {
     style: {
       display: 'flex',
       gap: 6,
