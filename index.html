@@ -7,10 +7,9 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js" crossorigin></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js" crossorigin></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" crossorigin></script>
-<script src="https://cdn.tailwindcss.com"></script>
+<script src="vendor/react.production.min.js"></script>
+<script src="vendor/react-dom.production.min.js"></script>
+<script src="vendor/jspdf.umd.min.js"></script>
 <style>
   :root { --steel:#1a1f26; --panel:#232a33; --line:#39424e; --vis:#f5a623; --vis2:#ffcc33; }
   html,body{ background:#12161b; }
@@ -1766,12 +1765,17 @@ function App() {
     report: active
   }), toastNode);
 }
-const root = ReactDOM.createRoot(document.getElementById('root'));
 window.addEventListener('error', e => {
   const el = document.getElementById('root');
-  if (el && !el.hasChildNodes()) el.innerHTML = '<div style="padding:24px;color:#ffb4b4;font-family:sans-serif">App failed to start: ' + (e.message || '') + '. Check network access to the CDN scripts.</div>';
+  if (el && !el.hasChildNodes()) el.innerHTML = '<div style="padding:24px;color:#ffb4b4;font-family:sans-serif">App failed to start: ' + (e.message || '') + '. Try reloading the page; if it keeps happening, check your connection or try a different browser/network.</div>';
 });
-root.render(React.createElement(App, null));
+if (typeof React === 'undefined' || typeof ReactDOM === 'undefined') {
+  const el = document.getElementById('root');
+  if (el) el.innerHTML = '<div style="padding:24px;color:#ffb4b4;font-family:sans-serif">Could not load the app’s scripts (React did not load). Try reloading the page; if it keeps happening, check your connection or try a different browser/network.</div>';
+} else {
+  const root = ReactDOM.createRoot(document.getElementById('root'));
+  root.render(React.createElement(App, null));
+}
 </script>
 </body>
 </html>
