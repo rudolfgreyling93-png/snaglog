@@ -1322,19 +1322,32 @@ function ObsForm({
     className: "thumb-btn thumb-del",
     onClick: () => removePhoto(i),
     title: "Remove photo"
-  }, "×"))), (d.photos || []).length < MAX_PHOTOS && React.createElement("label", {
+  }, "×"))), (d.photos || []).length < MAX_PHOTOS && React.createElement(React.Fragment, null, React.createElement("label", {
     className: "btn",
     style: {
       cursor: 'pointer'
     }
-  }, "+ Photo", React.createElement("input", {
+  }, "📷 Take photo", React.createElement("input", {
+    type: "file",
+    accept: "image/*",
+    capture: "environment",
+    onChange: pickPhoto,
+    style: {
+      display: 'none'
+    }
+  })), React.createElement("label", {
+    className: "btn",
+    style: {
+      cursor: 'pointer'
+    }
+  }, "+ Choose photo", React.createElement("input", {
     type: "file",
     accept: "image/*",
     onChange: pickPhoto,
     style: {
       display: 'none'
     }
-  })))), React.createElement("div", {
+  }))))), React.createElement("div", {
     style: {
       display: 'flex',
       gap: 8,
