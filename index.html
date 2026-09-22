@@ -9,9 +9,11 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="vendor/leaflet.css">
 <script src="vendor/react.production.min.js"></script>
 <script src="vendor/react-dom.production.min.js"></script>
 <script src="vendor/jspdf.umd.min.js"></script>
+<script src="vendor/leaflet.js"></script>
 <style>
   :root { --steel:#1a1f26; --panel:#232a33; --line:#39424e; --vis:#f5a623; --vis2:#ffcc33; }
   html,body{ background:#12161b; }
@@ -108,6 +110,9 @@ const COMPANY = {
   members: 'IM Moeti; SJ vd Hoven; TE Moeti; PG Joubert',
   logo: 'assets/logo.png'
 };
+const ESRI_IMAGERY_URL = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
+const ESRI_LABELS_URL = 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}';
+const ESRI_ATTRIBUTION = 'Tiles © Esri — Esri, Maxar, Earthstar Geographics, and the GIS User Community';
 const DB_NAME = 'snaglog-db',
   STORE = 'reports',
   DB_VER = 1;
@@ -892,6 +897,106 @@ function MiniMap({
     fontSize: "10",
     fill: print ? '#000' : '#8a94a0'
   }, "N up. Schematic relative positions (not to scale).")));
+}
+function AerialMap({
+  observations
+}) {
+  const mapDivRef = useRef(null);
+  const leafletRef = useRef(null);
+  const groupRef = useRef(null);
+  const [mapErr, setMapErr] = useState(null);
+  const pts = observations.map((o, i) => ({
+    o,
+    n: i + 1
+  })).filter(p => p.o.lat != null && p.o.lng != null && p.o.lat !== '' && p.o.lng !== '');
+  useEffect(() => {
+    if (!mapDivRef.current) return;
+    if (typeof L === 'undefined') {
+      setMapErr('Map library failed to load. Check your connection and reload.');
+      return;
+    }
+    try {
+      if (!leafletRef.current) {
+        const map = L.map(mapDivRef.current, {
+          zoomControl: true,
+          attributionControl: true
+        }).setView([0, 0], 2);
+        L.tileLayer(ESRI_IMAGERY_URL, {
+          maxZoom: 20,
+          maxNativeZoom: 19,
+          attribution: ESRI_ATTRIBUTION
+        }).addTo(map);
+        L.tileLayer(ESRI_LABELS_URL, {
+          maxZoom: 20,
+          maxNativeZoom: 19,
+          opacity: 0.85
+        }).addTo(map);
+        groupRef.current = L.layerGroup().addTo(map);
+        leafletRef.current = map;
+      }
+      const map = leafletRef.current,
+        group = groupRef.current;
+      group.clearLayers();
+      pts.forEach(p => {
+        const sev = SEVERITIES[p.o.severity] || {};
+        const col = sev.color || '#888';
+        const icon = L.divIcon({
+          className: '',
+          html: '<div style="width:26px;height:26px;border-radius:50%;background:' + col + ';border:2px solid #000;display:flex;align-items:center;justify-content:center;font:700 12px Inter,sans-serif;color:#0a0a0a;box-shadow:0 1px 3px rgba(0,0,0,.6)">' + p.n + '</div>',
+          iconSize: [26, 26],
+          iconAnchor: [13, 13]
+        });
+        const esc = s => String(s == null ? '' : s).replace(/[<>&]/g, c => ({
+          '<': '&lt;',
+          '>': '&gt;',
+          '&': '&amp;'
+        }[c]));
+        L.marker([+p.o.lat, +p.o.lng], {
+          icon
+        }).addTo(group).bindPopup('<b>#' + p.n + '</b> ' + esc(sev.label || p.o.severity) + '<br>' + esc(p.o.location || ''));
+      });
+      if (pts.length === 1) {
+        map.setView([+pts[0].o.lat, +pts[0].o.lng], 19);
+      } else if (pts.length > 1) {
+        map.fitBounds(L.latLngBounds(pts.map(p => [+p.o.lat, +p.o.lng])), {
+          padding: [30, 30],
+          maxZoom: 19
+        });
+      }
+      setTimeout(() => map.invalidateSize(), 60);
+      setMapErr(null);
+    } catch (e) {
+      setMapErr('Could not load the map: ' + e.message);
+    }
+  });
+  useEffect(() => () => {
+    if (leafletRef.current) {
+      leafletRef.current.remove();
+      leafletRef.current = null;
+    }
+  }, []);
+  return React.createElement("div", null, !pts.length && React.createElement("div", {
+    style: {
+      fontSize: 13,
+      opacity: .7,
+      padding: '0 0 8px'
+    }
+  }, "No GPS-tagged observations yet. Use the GPS button on an observation to place pins."), mapErr && React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: '#ffb4b4',
+      padding: '0 0 8px'
+    }
+  }, mapErr), React.createElement("div", {
+    ref: mapDivRef,
+    style: {
+      height: 320,
+      borderRadius: 8,
+      overflow: 'hidden',
+      border: '1px solid var(--line)',
+      background: '#0d1116'
+    }
+  }));
 }
 function ObsCard({
   obs,
@@ -1973,7 +2078,7 @@ function App() {
       padding: '2px 8px',
       borderRadius: 999
     }
-  }, SEVERITIES[c.k].label, ": ", c.n)))), React.createElement(MiniMap, {
+  }, SEVERITIES[c.k].label, ": ", c.n)))), React.createElement(AerialMap, {
     observations: active.observations
   })), React.createElement(ObsForm, {
     onSubmit: addObs,
