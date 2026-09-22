@@ -93,10 +93,11 @@ const SEVERITIES = {
   }
 };
 const SEV_ORDER = ['observation', 'minor', 'major', 'hazard'];
-const WEATHER = ['Clear', 'Sunny', 'Partly cloudy', 'Overcast', 'Light rain', 'Heavy rain', 'Windy', 'Fog', 'Hot', 'Cold'];
 const MAX_PHOTOS = 3;
 const MAX_W = 1024;
 const JPEG_Q = 0.7;
+const MAX_DOCS = 10;
+const MAX_DOC_MB = 20;
 const DB_NAME = 'snaglog-db',
   STORE = 'reports',
   DB_VER = 1;
@@ -162,11 +163,10 @@ function blankReport() {
       date: todayISO(),
       inspector: '',
       contractor: '',
-      client: '',
-      weather: 'Clear',
-      temperature: ''
+      client: ''
     },
     observations: [],
+    documents: [],
     createdAt: Date.now(),
     updatedAt: Date.now()
   };
@@ -192,6 +192,21 @@ function urlToImage(src) {
     img.onerror = () => rej(new Error('Could not load photo for annotation.'));
     img.src = src;
   });
+}
+function fileToDataURL(file) {
+  return new Promise((res, rej) => {
+    if (!file) return rej(new Error('No file given.'));
+    const reader = new FileReader();
+    reader.onerror = () => rej(new Error('Could not read the file.'));
+    reader.onload = () => res(reader.result);
+    reader.readAsDataURL(file);
+  });
+}
+function fmtBytes(n) {
+  if (n == null) return '';
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+  return (n / 1024 / 1024).toFixed(1) + ' MB';
 }
 function scaledDims(w, h) {
   if (w <= MAX_W) return {
@@ -331,7 +346,7 @@ async function buildPDF(report, notify) {
   doc.setFontSize(11);
   doc.text(m.projectName || 'Untitled project', margin, y + 3);
   y += 9;
-  const rows = [['Project', m.projectName || '—', 'Date', m.date || '—'], ['Inspector', m.inspector || '—', 'Weather', (m.weather || '—') + (m.temperature ? ` / ${m.temperature}°C` : '')], ['Contractor', m.contractor || '—', 'Client', m.client || '—']];
+  const rows = [['Project', m.projectName || '—', 'Date', m.date || '—'], ['Inspector', m.inspector || '—', 'Contractor', m.contractor || '—'], ['Client', m.client || '—']];
   const labelW = 26,
     valW = contentW / 2 - labelW;
   const rowH = 7;
@@ -339,7 +354,7 @@ async function buildPDF(report, notify) {
   rows.forEach((r, ri) => {
     const ry = y + ri * rowH;
     let x = margin;
-    const cols = [labelW, valW, labelW, valW];
+    const cols = r.length === 4 ? [labelW, valW, labelW, valW] : [labelW, contentW - labelW];
     r.forEach((cell, ci) => {
       doc.setDrawColor(0);
       doc.rect(x, ry, cols[ci], rowH);
@@ -470,6 +485,21 @@ async function buildPDF(report, notify) {
       }
     }
     y = blockTop + blockH + 4;
+  }
+  if ((report.documents || []).length) {
+    ensure(10);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.text(`Attached documents (${report.documents.length})`, margin, y);
+    y += 5;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    report.documents.forEach(d => {
+      ensure(5);
+      doc.text(`• ${d.name} (${fmtBytes(d.size)})`, margin + 2, y);
+      y += 4.6;
+    });
+    y += 3;
   }
   ensure(34);
   y += 6;
@@ -1246,7 +1276,6 @@ function ObsForm({
   }, "+ Photo", React.createElement("input", {
     type: "file",
     accept: "image/*",
-    capture: "environment",
     onChange: pickPhoto,
     style: {
       display: 'none'
@@ -1300,7 +1329,9 @@ function PrintReport({
     style: {
       marginBottom: 12
     }
-  }, React.createElement("tbody", null, React.createElement("tr", null, React.createElement("th", null, "Project"), React.createElement("td", null, m.projectName || '—'), React.createElement("th", null, "Date"), React.createElement("td", null, m.date || '—')), React.createElement("tr", null, React.createElement("th", null, "Inspector"), React.createElement("td", null, m.inspector || '—'), React.createElement("th", null, "Weather"), React.createElement("td", null, m.weather || '—', m.temperature ? ` / ${m.temperature} °C` : '')), React.createElement("tr", null, React.createElement("th", null, "Contractor"), React.createElement("td", null, m.contractor || '—'), React.createElement("th", null, "Client"), React.createElement("td", null, m.client || '—')))), React.createElement("h3", {
+  }, React.createElement("tbody", null, React.createElement("tr", null, React.createElement("th", null, "Project"), React.createElement("td", null, m.projectName || '—'), React.createElement("th", null, "Date"), React.createElement("td", null, m.date || '—')), React.createElement("tr", null, React.createElement("th", null, "Inspector"), React.createElement("td", null, m.inspector || '—'), React.createElement("th", null, "Contractor"), React.createElement("td", null, m.contractor || '—')), React.createElement("tr", null, React.createElement("th", null, "Client"), React.createElement("td", {
+    colSpan: 3
+  }, m.client || '—')))), React.createElement("h3", {
     className: "font-head",
     style: {
       fontSize: 15,
@@ -1347,7 +1378,25 @@ function PrintReport({
       src: p,
       alt: ""
     })))));
-  }), React.createElement("div", {
+  }), (report.documents || []).length > 0 && React.createElement("div", {
+    style: {
+      marginTop: 14
+    }
+  }, React.createElement("h3", {
+    className: "font-head",
+    style: {
+      fontSize: 15,
+      margin: '0 0 6px'
+    }
+  }, "Attached documents (", report.documents.length, ")"), React.createElement("ul", {
+    style: {
+      margin: 0,
+      paddingLeft: 18,
+      fontSize: 11
+    }
+  }, report.documents.map(d => React.createElement("li", {
+    key: d.id
+  }, d.name, " (", fmtBytes(d.size), ")")))), React.createElement("div", {
     className: "pr-sig"
   }, React.createElement("div", null, React.createElement("div", {
     className: "line"
@@ -1429,6 +1478,40 @@ function App() {
       observations: r.observations.filter(x => x.id !== id)
     }));
   };
+  const addDocuments = async files => {
+    const list = Array.from(files || []);
+    if (!list.length) return;
+    const room = MAX_DOCS - (active.documents || []).length;
+    if (room <= 0) return notify('Maximum ' + MAX_DOCS + ' documents per report.', 'error');
+    const toAdd = list.slice(0, room);
+    if (list.length > toAdd.length) notify('Only added ' + toAdd.length + ' of ' + list.length + ' files (max ' + MAX_DOCS + ' documents per report).', 'error');
+    for (const f of toAdd) {
+      if (f.size > MAX_DOC_MB * 1024 * 1024) {
+        notify(f.name + ' is over ' + MAX_DOC_MB + ' MB and was skipped.', 'error');
+        continue;
+      }
+      try {
+        const data = await fileToDataURL(f);
+        patchActive(r => ({
+          ...r,
+          documents: [...(r.documents || []), {
+            id: uid(),
+            name: f.name,
+            type: f.type || '',
+            size: f.size,
+            data,
+            addedAt: Date.now()
+          }]
+        }));
+      } catch (e) {
+        notify('Could not add ' + f.name + ': ' + e.message, 'error');
+      }
+    }
+  };
+  const removeDocument = id => patchActive(r => ({
+    ...r,
+    documents: (r.documents || []).filter(d => d.id !== id)
+  }));
   const newReport = () => {
     const b = blankReport();
     setReports(rs => [b, ...rs]);
@@ -1654,35 +1737,84 @@ function App() {
     },
     value: m.date,
     onChange: e => setMeta('date', e.target.value)
-  })), React.createElement("div", null, React.createElement("label", {
-    style: {
-      fontSize: 12,
-      opacity: .7
-    }
-  }, "Weather"), React.createElement("select", {
-    className: "field",
-    style: {
-      marginTop: 4
-    },
-    value: m.weather,
-    onChange: e => setMeta('weather', e.target.value)
-  }, WEATHER.map(w => React.createElement("option", {
-    key: w
-  }, w)))), React.createElement("div", null, React.createElement("label", {
-    style: {
-      fontSize: 12,
-      opacity: .7
-    }
-  }, "Temperature (°C)"), React.createElement("input", {
-    type: "number",
-    className: "field",
-    style: {
-      marginTop: 4
-    },
-    value: m.temperature,
-    onChange: e => setMeta('temperature', e.target.value),
-    placeholder: "e.g. 24"
   })))), React.createElement("section", {
+    style: {
+      background: 'var(--panel)',
+      border: '1px solid var(--line)',
+      borderRadius: 10,
+      padding: 14,
+      marginBottom: 14
+    }
+  }, React.createElement("div", {
+    className: "font-head",
+    style: {
+      fontSize: 20,
+      marginBottom: 4
+    }
+  }, "Project documents"), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      opacity: .55,
+      marginBottom: 8
+    }
+  }, "Drawings, specs, site instructions or any other reference file for this report."), (active.documents || []).length > 0 && React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 6,
+      marginBottom: 10
+    }
+  }, active.documents.map(d => React.createElement("div", {
+    key: d.id,
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      padding: '6px 8px',
+      background: '#12161b',
+      border: '1px solid var(--line)',
+      borderRadius: 6
+    }
+  }, React.createElement("span", {
+    style: {
+      flex: 1,
+      fontSize: 13,
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap'
+    }
+  }, d.name), React.createElement("span", {
+    style: {
+      fontSize: 11,
+      opacity: .6,
+      flexShrink: 0
+    }
+  }, fmtBytes(d.size)), React.createElement("a", {
+    href: d.data,
+    download: d.name,
+    className: "btn btn-sm",
+    style: {
+      textDecoration: 'none'
+    }
+  }, "Open"), React.createElement("button", {
+    className: "btn btn-sm btn-danger",
+    onClick: () => removeDocument(d.id)
+  }, "×")))), (active.documents || []).length < MAX_DOCS && React.createElement("label", {
+    className: "btn",
+    style: {
+      cursor: 'pointer'
+    }
+  }, "+ Document", React.createElement("input", {
+    type: "file",
+    multiple: true,
+    onChange: e => {
+      addDocuments(e.target.files);
+      e.target.value = '';
+    },
+    style: {
+      display: 'none'
+    }
+  }))), React.createElement("section", {
     style: {
       background: 'var(--panel)',
       border: '1px solid var(--line)',
