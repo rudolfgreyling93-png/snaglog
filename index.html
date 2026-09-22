@@ -311,6 +311,25 @@ function mapTransform(observations) {
     maxLo
   };
 }
+async function fetchStaticMapImage(observations, w, h) {
+  const tf = mapTransform(observations);
+  if (!tf) return null;
+  const bbox = [tf.minLo, tf.minLa, tf.maxLo, tf.maxLa].join(',');
+  const url = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export' + '?bbox=' + encodeURIComponent(bbox) + '&bboxSR=4326&imageSR=4326&size=' + w + ',' + h + '&format=png&transparent=false&f=image';
+  const res = await fetch(url);
+  if (!res.ok) throw new Error('Map image request failed (' + res.status + ')');
+  const blob = await res.blob();
+  const dataURL = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error('Could not read map image.'));
+    reader.readAsDataURL(blob);
+  });
+  return {
+    dataURL,
+    tf
+  };
+}
 async function buildPDF(report, notify) {
   const {
     jsPDF
@@ -322,6 +341,10 @@ async function buildPDF(report, notify) {
   let logoImg = null;
   try {
     logoImg = await urlToImage(COMPANY.logo);
+  } catch (e) {}
+  let mapImg = null;
+  try {
+    mapImg = await fetchStaticMapImage(report.observations, 1100, 330);
   } catch (e) {}
   const allPhotos = [];
   report.observations.forEach(o => (o.photos || []).forEach(p => allPhotos.push(p)));
@@ -431,6 +454,13 @@ async function buildPDF(report, notify) {
     doc.setFontSize(9);
     doc.text('No GPS-tagged observations recorded.', margin + 3, y + mapH / 2);
   } else {
+    if (mapImg && mapImg.dataURL) {
+      try {
+        doc.addImage(mapImg.dataURL, 'PNG', margin, y, contentW, mapH);
+      } catch (e) {}
+      doc.setDrawColor(0);
+      doc.rect(margin, y, contentW, mapH);
+    }
     const X = lo => margin + (lo - tf.minLo) / (tf.maxLo - tf.minLo) * contentW;
     const Y = la => y + mapH - (la - tf.minLa) / (tf.maxLa - tf.minLa) * mapH;
     tf.pts.forEach(p => {
@@ -827,7 +857,8 @@ function AnnotationModal({
 }
 function MiniMap({
   observations,
-  print
+  print,
+  staticMap
 }) {
   const tf = mapTransform(observations);
   if (!tf) return React.createElement("div", {
@@ -848,6 +879,7 @@ function MiniMap({
     H = 300;
   const X = lo => (lo - minLo) / (maxLo - minLo) * W;
   const Y = la => H - (la - minLa) / (maxLa - minLa) * H;
+  const hasImg = !!(staticMap && staticMap.dataURL);
   return React.createElement("div", {
     className: print ? 'pr-map' : ''
   }, React.createElement("svg", {
@@ -855,11 +887,18 @@ function MiniMap({
     style: {
       width: '100%',
       height: 'auto',
-      background: print ? '#fff' : '#0d1116',
+      background: hasImg ? '#000' : print ? '#fff' : '#0d1116',
       border: '1px solid ' + (print ? '#000' : 'var(--line)'),
       borderRadius: print ? 0 : 8
     }
-  }, [0.25, 0.5, 0.75].map(f => React.createElement("g", {
+  }, hasImg && React.createElement("image", {
+    href: staticMap.dataURL,
+    x: "0",
+    y: "0",
+    width: W,
+    height: H,
+    preserveAspectRatio: "none"
+  }), !hasImg && [0.25, 0.5, 0.75].map(f => React.createElement("g", {
     key: f,
     stroke: print ? '#000' : '#2a323c',
     strokeWidth: "0.5",
@@ -881,22 +920,32 @@ function MiniMap({
       transform: `translate(${X(+p.o.lng)},${Y(+p.o.lat)})`
     }, React.createElement("circle", {
       r: "12",
-      fill: print ? '#fff' : c,
-      stroke: print ? '#000' : '#000',
+      fill: hasImg ? c : print ? '#fff' : c,
+      stroke: '#000',
       strokeWidth: print ? 1.2 : 1
     }), React.createElement("text", {
       textAnchor: "middle",
       dy: "4",
       fontSize: "12",
       fontWeight: "700",
-      fill: print ? '#000' : '#0a0a0a'
+      fill: hasImg ? '#0a0a0a' : print ? '#000' : '#0a0a0a'
     }, p.n));
-  }), React.createElement("text", {
+  }), !hasImg && React.createElement("text", {
     x: "6",
     y: H - 8,
     fontSize: "10",
     fill: print ? '#000' : '#8a94a0'
-  }, "N up. Schematic relative positions (not to scale).")));
+  }, "N up. Schematic relative positions (not to scale)."), hasImg && React.createElement("text", {
+    x: "6",
+    y: H - 8,
+    fontSize: "9",
+    fill: "#fff",
+    style: {
+      paintOrder: 'stroke',
+      stroke: '#000',
+      strokeWidth: 2
+    }
+  }, "Esri World Imagery")));
 }
 function AerialMap({
   observations
@@ -1481,7 +1530,8 @@ function ObsForm({
   }));
 }
 function PrintReport({
-  report
+  report,
+  staticMap
 }) {
   const m = report.meta;
   return React.createElement("div", {
@@ -1542,7 +1592,8 @@ function PrintReport({
     }
   }, "Location plan"), React.createElement(MiniMap, {
     observations: report.observations,
-    print: true
+    print: true,
+    staticMap: staticMap
   }), React.createElement("h3", {
     className: "font-head",
     style: {
@@ -1631,6 +1682,8 @@ function App() {
   const [ready, setReady] = useState(false);
   const [dbOk, setDbOk] = useState(true);
   const [pdfBusy, setPdfBusy] = useState(false);
+  const [printMap, setPrintMap] = useState(null);
+  const [printBusy, setPrintBusy] = useState(false);
   useEffect(() => {
     (async () => {
       try {
@@ -1767,6 +1820,18 @@ function App() {
     }
     setPdfBusy(false);
   };
+  const doPrint = async () => {
+    if (!active || printBusy) return;
+    setPrintBusy(true);
+    try {
+      const img = await fetchStaticMapImage(active.observations, 900, 450);
+      setPrintMap(img);
+    } catch (e) {
+      setPrintMap(null);
+    }
+    setPrintBusy(false);
+    setTimeout(() => window.print(), 60);
+  };
   const backup = () => {
     saveFile('snag-backup-' + todayISO() + '.json', new Blob([JSON.stringify(reports, null, 2)], {
       type: 'application/json'
@@ -1882,9 +1947,10 @@ function App() {
     }
   })), React.createElement("button", {
     className: "btn",
-    onClick: () => window.print(),
+    onClick: doPrint,
+    disabled: printBusy,
     title: "Open the browser print dialog"
-  }, "Print"), React.createElement("button", {
+  }, printBusy ? 'Preparing…' : 'Print'), React.createElement("button", {
     className: "btn btn-vis",
     onClick: exportPDF,
     disabled: pdfBusy
@@ -2120,7 +2186,8 @@ function App() {
     },
     onDelete: () => delObs(o.id)
   }))))), React.createElement(PrintReport, {
-    report: active
+    report: active,
+    staticMap: printMap
   }), toastNode);
 }
 window.addEventListener('error', e => {
