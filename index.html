@@ -1,0 +1,1777 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Site Inspection & Snag Report</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js" crossorigin></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" crossorigin></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  :root { --steel:#1a1f26; --panel:#232a33; --line:#39424e; --vis:#f5a623; --vis2:#ffcc33; }
+  html,body{ background:#12161b; }
+  body{ font-family:'Inter',system-ui,sans-serif; color:#e6eaef; margin:0; -webkit-text-size-adjust:100%; }
+  .font-head{ font-family:'Oswald',sans-serif; letter-spacing:.02em; }
+  input,select,textarea,button{ font-family:inherit; }
+  textarea{ resize:vertical; }
+  .field{ background:#12161b; border:1px solid var(--line); border-radius:8px; padding:.55rem .7rem; width:100%; color:#e6eaef; outline:none; }
+  .field:focus{ border-color:var(--vis); box-shadow:0 0 0 2px rgba(245,166,35,.25); }
+  .btn{ display:inline-flex; align-items:center; gap:.4rem; border-radius:8px; padding:.5rem .8rem; font-weight:600; border:1px solid var(--line); background:var(--panel); color:#e6eaef; cursor:pointer; }
+  .btn:hover{ border-color:#5a6675; }
+  .btn:disabled{ opacity:.45; cursor:not-allowed; }
+  .btn-vis{ background:var(--vis); color:#1a1200; border-color:var(--vis); }
+  .btn-vis:hover{ background:var(--vis2); border-color:var(--vis2); }
+  .btn-danger{ background:#3a1c1c; border-color:#5c2b2b; color:#ffb4b4; }
+  .btn-sm{ padding:.3rem .5rem; font-size:12px; }
+  .anno-canvas{ touch-action:none; max-width:100%; background:#000; border-radius:6px; display:block; }
+  .listening{ animation:pulse 1s infinite; }
+  @keyframes pulse{ 0%,100%{ box-shadow:0 0 0 0 rgba(239,68,68,.6);} 50%{ box-shadow:0 0 0 6px rgba(239,68,68,0);} }
+  .print-only{ display:none; }
+  .thumb-wrap{ position:relative; }
+  .thumb-btn{ position:absolute; top:-8px; width:22px; height:22px; border-radius:999px; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:12px; line-height:1; }
+  .thumb-anno{ left:-8px; background:#173a26; border:1px solid #2b5c3f; color:#8ef0b0; }
+  .thumb-del{ right:-8px; background:#3a1c1c; border:1px solid #5c2b2b; color:#ffb4b4; }
+  .anno-badge{ position:absolute; bottom:2px; right:2px; background:rgba(245,166,35,.9); color:#1a1200; font-size:9px; font-weight:700; padding:1px 4px; border-radius:4px; }
+
+  @media print{
+    @page{ size:A4; margin:14mm; }
+    html,body{ background:#fff !important; color:#000 !important; }
+    .no-print{ display:none !important; }
+    .print-only{ display:block !important; }
+    .pr-wrap{ color:#000; font-family:'Inter',sans-serif; }
+    .pr-wrap h1,.pr-wrap h2,.pr-wrap h3,.pr-wrap .font-head{ font-family:'Oswald',sans-serif; color:#000; }
+    .pr-table{ width:100%; border-collapse:collapse; }
+    .pr-table td,.pr-table th{ border:1px solid #000; padding:5px 7px; font-size:11px; vertical-align:top; text-align:left; }
+    .pr-snag{ border:1px solid #000; margin:0 0 10px; page-break-inside:avoid; }
+    .pr-snag-head{ border-bottom:1px solid #000; padding:5px 8px; font-weight:700; }
+    .pr-snag-body{ padding:6px 8px; font-size:12px; }
+    .pr-photos{ display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
+    .pr-photos img{ width:31%; border:1px solid #000; }
+    .pr-sig{ display:flex; gap:24px; margin-top:26px; page-break-inside:avoid; }
+    .pr-sig div{ flex:1; }
+    .pr-sig .line{ border-top:1px solid #000; margin-top:38px; padding-top:4px; font-size:11px; }
+    .pr-map svg{ width:100%; height:auto; border:1px solid #000; }
+    .sev-chip{ border:1px solid #000 !important; color:#000 !important; background:#fff !important; }
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>window.__EMBEDDED=(function(){try{return window.self!==window.top;}catch(e){return true;}})();window.addEventListener("securitypolicyviolation",function(ev){var el=document.getElementById("root");if(el&&!el.hasChildNodes()){el.innerHTML="<div style=\"padding:24px;color:#ffb4b4;font-family:sans-serif\">Blocked by page security policy: "+ev.violatedDirective+" ("+(ev.blockedURI||"inline")+").</div>";}});</script>
+
+<script>
+const {
+  useState,
+  useEffect,
+  useRef,
+  useMemo,
+  useCallback
+} = React;
+const SEVERITIES = {
+  observation: {
+    label: 'Observation',
+    color: '#38bdf8',
+    bg: '#0d2a3a'
+  },
+  minor: {
+    label: 'Minor defect',
+    color: '#fbbf24',
+    bg: '#332708'
+  },
+  major: {
+    label: 'Major defect',
+    color: '#fb923c',
+    bg: '#331c07'
+  },
+  hazard: {
+    label: 'Safety hazard',
+    color: '#ef4444',
+    bg: '#350f0f'
+  }
+};
+const SEV_ORDER = ['observation', 'minor', 'major', 'hazard'];
+const WEATHER = ['Clear', 'Sunny', 'Partly cloudy', 'Overcast', 'Light rain', 'Heavy rain', 'Windy', 'Fog', 'Hot', 'Cold'];
+const MAX_PHOTOS = 3;
+const MAX_W = 1024;
+const JPEG_Q = 0.7;
+const DB_NAME = 'snaglog-db',
+  STORE = 'reports',
+  DB_VER = 1;
+function openDB() {
+  return new Promise((res, rej) => {
+    let r;
+    try {
+      r = indexedDB.open(DB_NAME, DB_VER);
+    } catch (e) {
+      return rej(e);
+    }
+    r.onupgradeneeded = () => {
+      const db = r.result;
+      if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE, {
+        keyPath: 'id'
+      });
+    };
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+}
+async function idbGetAll() {
+  const db = await openDB();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(STORE, 'readonly');
+    const q = tx.objectStore(STORE).getAll();
+    q.onsuccess = () => res(q.result || []);
+    q.onerror = () => rej(q.error);
+  });
+}
+async function idbPut(rep) {
+  const db = await openDB();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(STORE, 'readwrite');
+    tx.objectStore(STORE).put(rep);
+    tx.oncomplete = () => res(true);
+    tx.onerror = () => rej(tx.error);
+  });
+}
+async function idbDel(id) {
+  const db = await openDB();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(STORE, 'readwrite');
+    tx.objectStore(STORE).delete(id);
+    tx.oncomplete = () => res(true);
+    tx.onerror = () => rej(tx.error);
+  });
+}
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+const todayISO = () => new Date().toISOString().slice(0, 10);
+const fmtDT = ts => {
+  try {
+    return new Date(ts).toLocaleString('en-GB');
+  } catch (e) {
+    return '';
+  }
+};
+function blankReport() {
+  return {
+    id: uid(),
+    meta: {
+      projectName: '',
+      date: todayISO(),
+      inspector: '',
+      contractor: '',
+      client: '',
+      weather: 'Clear',
+      temperature: ''
+    },
+    observations: [],
+    createdAt: Date.now(),
+    updatedAt: Date.now()
+  };
+}
+function fileToImage(file) {
+  return new Promise((res, rej) => {
+    if (!file || !file.type || !file.type.startsWith('image/')) return rej(new Error('Not an image file.'));
+    const reader = new FileReader();
+    reader.onerror = () => rej(new Error('Could not read the file.'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => res(img);
+      img.onerror = () => rej(new Error('Image data is corrupt or unsupported.'));
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+function urlToImage(src) {
+  return new Promise((res, rej) => {
+    const img = new Image();
+    img.onload = () => res(img);
+    img.onerror = () => rej(new Error('Could not load photo for annotation.'));
+    img.src = src;
+  });
+}
+function scaledDims(w, h) {
+  if (w <= MAX_W) return {
+    w,
+    h
+  };
+  const r = MAX_W / w;
+  return {
+    w: Math.round(w * r),
+    h: Math.round(h * r)
+  };
+}
+function imageToDataURL(img) {
+  const dims = scaledDims(img.naturalWidth || img.width, img.naturalHeight || img.height);
+  const c = document.createElement('canvas');
+  c.width = dims.w;
+  c.height = dims.h;
+  const ctx = c.getContext('2d');
+  ctx.drawImage(img, 0, 0, dims.w, dims.h);
+  return c.toDataURL('image/jpeg', JPEG_Q);
+}
+function toCSV(report) {
+  const rows = [['#', 'Location / chainage', 'Latitude', 'Longitude', 'Severity', 'Description', 'Action required', 'Photos', 'Logged']];
+  report.observations.forEach((o, i) => rows.push([i + 1, o.location || '', o.lat || '', o.lng || '', (SEVERITIES[o.severity] || {}).label || o.severity, o.description || '', o.action || '', (o.photos || []).length, fmtDT(o.createdAt)]));
+  const esc = v => {
+    const s = String(v == null ? '' : v);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  return '﻿' + rows.map(r => r.map(esc).join(',')).join('\r\n');
+}
+async function saveFile(filename, blob, notify) {
+  try {
+    if (window.claude && typeof window.claude.use === 'function') {
+      const dl = await window.claude.use('downloads');
+      if (dl) {
+        const r = await dl.save({
+          filename,
+          data: blob
+        });
+        if (!r || r.status === 'saved') notify && notify('Saved ' + filename + '.', 'ok');
+        return;
+      }
+    }
+  } catch (e) {
+    if (e && e.code === 'declined') return;
+    notify && notify('Download failed: ' + (e && e.message || e), 'error');
+    return;
+  }
+  try {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      URL.revokeObjectURL(url);
+      a.remove();
+    }, 500);
+  } catch (e) {
+    notify && notify('Download not supported in this environment.', 'error');
+  }
+}
+function mapTransform(observations) {
+  const pts = observations.map((o, i) => ({
+    o,
+    n: i + 1
+  })).filter(p => p.o.lat != null && p.o.lng != null && p.o.lat !== '' && p.o.lng !== '');
+  if (!pts.length) return null;
+  const lats = pts.map(p => +p.o.lat),
+    lngs = pts.map(p => +p.o.lng);
+  let minLa = Math.min(...lats),
+    maxLa = Math.max(...lats),
+    minLo = Math.min(...lngs),
+    maxLo = Math.max(...lngs);
+  const spanLa = maxLa - minLa || 0.0005,
+    spanLo = maxLo - minLo || 0.0005;
+  minLa -= spanLa * 0.15;
+  maxLa += spanLa * 0.15;
+  minLo -= spanLo * 0.15;
+  maxLo += spanLo * 0.15;
+  return {
+    pts,
+    minLa,
+    maxLa,
+    minLo,
+    maxLo
+  };
+}
+async function buildPDF(report, notify) {
+  const {
+    jsPDF
+  } = window.jspdf || {};
+  if (!jsPDF) {
+    notify('PDF library failed to load (check network access to the CDN).', 'error');
+    return null;
+  }
+  const allPhotos = [];
+  report.observations.forEach(o => (o.photos || []).forEach(p => allPhotos.push(p)));
+  const imgDims = {};
+  await Promise.all(allPhotos.map(async src => {
+    if (imgDims[src]) return;
+    try {
+      const img = await urlToImage(src);
+      imgDims[src] = {
+        w: img.naturalWidth || img.width,
+        h: img.naturalHeight || img.height
+      };
+    } catch (e) {
+      imgDims[src] = {
+        w: 4,
+        h: 3
+      };
+    }
+  }));
+  const doc = new jsPDF({
+    unit: 'mm',
+    format: 'a4'
+  });
+  const pageW = doc.internal.pageSize.getWidth();
+  const pageH = doc.internal.pageSize.getHeight();
+  const margin = 14;
+  const contentW = pageW - margin * 2;
+  let y = margin;
+  const ensure = need => {
+    if (y + need > pageH - margin) {
+      doc.addPage();
+      y = margin;
+    }
+  };
+  const m = report.meta;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(18);
+  doc.text('SITE INSPECTION & SNAG REPORT', margin, y + 6);
+  y += 10;
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(11);
+  doc.text(m.projectName || 'Untitled project', margin, y + 3);
+  y += 9;
+  const rows = [['Project', m.projectName || '—', 'Date', m.date || '—'], ['Inspector', m.inspector || '—', 'Weather', (m.weather || '—') + (m.temperature ? ` / ${m.temperature}°C` : '')], ['Contractor', m.contractor || '—', 'Client', m.client || '—']];
+  const labelW = 26,
+    valW = contentW / 2 - labelW;
+  const rowH = 7;
+  doc.setFontSize(9);
+  rows.forEach((r, ri) => {
+    const ry = y + ri * rowH;
+    let x = margin;
+    const cols = [labelW, valW, labelW, valW];
+    r.forEach((cell, ci) => {
+      doc.setDrawColor(0);
+      doc.rect(x, ry, cols[ci], rowH);
+      doc.setFont('helvetica', ci % 2 === 0 ? 'bold' : 'normal');
+      const txt = doc.splitTextToSize(String(cell), cols[ci] - 3);
+      doc.text(txt[0] || '', x + 1.5, ry + rowH / 2 + 1.2);
+      x += cols[ci];
+    });
+  });
+  y += rows.length * rowH + 8;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(12);
+  ensure(14);
+  doc.text('Location plan', margin, y);
+  y += 4;
+  const mapH = 55;
+  ensure(mapH + 4);
+  doc.setDrawColor(0);
+  doc.rect(margin, y, contentW, mapH);
+  const tf = mapTransform(report.observations);
+  if (!tf) {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.text('No GPS-tagged observations recorded.', margin + 3, y + mapH / 2);
+  } else {
+    const X = lo => margin + (lo - tf.minLo) / (tf.maxLo - tf.minLo) * contentW;
+    const Y = la => y + mapH - (la - tf.minLa) / (tf.maxLa - tf.minLa) * mapH;
+    tf.pts.forEach(p => {
+      const col = (SEVERITIES[p.o.severity] || {}).color || '#888888';
+      const rgb = [parseInt(col.slice(1, 3), 16), parseInt(col.slice(3, 5), 16), parseInt(col.slice(5, 7), 16)];
+      const cx = X(+p.o.lng),
+        cy = Y(+p.o.lat);
+      doc.setFillColor(rgb[0], rgb[1], rgb[2]);
+      doc.setDrawColor(0);
+      doc.circle(cx, cy, 3, 'FD');
+      doc.setFontSize(8);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(0, 0, 0);
+      doc.text(String(p.n), cx, cy + 1, {
+        align: 'center'
+      });
+    });
+  }
+  doc.setTextColor(0, 0, 0);
+  y += mapH + 10;
+  ensure(10);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(12);
+  doc.text(`Observations (${report.observations.length})`, margin, y);
+  y += 6;
+  if (!report.observations.length) {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(10);
+    ensure(8);
+    doc.text('No observations recorded.', margin, y);
+    y += 8;
+  }
+  for (let i = 0; i < report.observations.length; i++) {
+    const o = report.observations[i];
+    const sev = SEVERITIES[o.severity] || {
+      label: o.severity
+    };
+    doc.setFontSize(9);
+    const descLines = doc.splitTextToSize(o.description || '—', contentW - 6);
+    const actionLines = doc.splitTextToSize('Action required: ' + (o.action || '—'), contentW - 6);
+    const coordLine = o.lat ? 1 : 0;
+    const photos = (o.photos || []).slice(0, MAX_PHOTOS);
+    const photoRowH = photos.length ? 34 : 0;
+    const bodyH = (coordLine + descLines.length + actionLines.length) * 4.6 + 6 + photoRowH + (photos.length ? 4 : 0);
+    const headH = 7;
+    const blockH = headH + bodyH + 4;
+    ensure(blockH + 4);
+    const blockTop = y;
+    doc.setDrawColor(0);
+    doc.rect(margin, blockTop, contentW, blockH);
+    doc.line(margin, blockTop + headH, margin + contentW, blockTop + headH);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.text(`#${i + 1}`, margin + 2, blockTop + 5);
+    doc.setFontSize(8);
+    const rgb2 = (() => {
+      const col = sev.color || '#888888';
+      return [parseInt(col.slice(1, 3), 16), parseInt(col.slice(3, 5), 16), parseInt(col.slice(5, 7), 16)];
+    })();
+    doc.setDrawColor(rgb2[0], rgb2[1], rgb2[2]);
+    doc.setLineWidth(0.5);
+    doc.rect(margin + 12, blockTop + 1.6, doc.getTextWidth(sev.label) + 5, 4.2);
+    doc.text(sev.label, margin + 14.5, blockTop + 4.5);
+    doc.setLineWidth(0.2);
+    doc.setDrawColor(0);
+    doc.setFont('helvetica', 'normal');
+    doc.text(String(o.location || ''), margin + 12 + doc.getTextWidth(sev.label) + 10, blockTop + 4.5);
+    let by = blockTop + headH + 4;
+    doc.setFontSize(8.5);
+    if (o.lat) {
+      doc.setFont('helvetica', 'bold');
+      doc.text('Coords:', margin + 3, by);
+      doc.setFont('helvetica', 'normal');
+      doc.text(`${(+o.lat).toFixed(5)}, ${(+o.lng).toFixed(5)}`, margin + 17, by);
+      by += 4.6;
+    }
+    doc.setFont('helvetica', 'bold');
+    doc.text('Description:', margin + 3, by);
+    doc.setFont('helvetica', 'normal');
+    doc.text(descLines, margin + 3, by + 4.4);
+    by += descLines.length * 4.6 + 1;
+    doc.setFont('helvetica', 'normal');
+    doc.text(actionLines, margin + 3, by + 3.6);
+    by += actionLines.length * 4.6 + 2;
+    if (photos.length) {
+      const gap = 3;
+      const pw = (contentW - 6 - gap * (photos.length - 1)) / photos.length;
+      let px = margin + 3;
+      for (const src of photos) {
+        const dim = imgDims[src] || {
+          w: 4,
+          h: 3
+        };
+        const ph = Math.min(photoRowH, pw * (dim.h / dim.w));
+        const drawW = ph * (dim.w / dim.h) > pw ? pw : ph * (dim.w / dim.h);
+        const drawH = drawW * (dim.h / dim.w);
+        try {
+          doc.addImage(src, 'JPEG', px, by, drawW, drawH, undefined, 'FAST');
+        } catch (e) {}
+        doc.setDrawColor(0);
+        doc.rect(px, by, drawW, drawH);
+        px += pw + gap;
+      }
+    }
+    y = blockTop + blockH + 4;
+  }
+  ensure(34);
+  y += 6;
+  const sigW = contentW / 3 - 6;
+  const sigY = y + 18;
+  [['Inspector', m.inspector || ''], ['Contractor representative', ''], ['Client representative', '']].forEach((s, i) => {
+    const sx = margin + i * (sigW + 9);
+    doc.setDrawColor(0);
+    doc.line(sx, sigY, sx + sigW, sigY);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.text(s[0] + (s[1] ? ': ' + s[1] : ''), sx, sigY + 4);
+  });
+  const pageCount = doc.internal.getNumberOfPages();
+  for (let p = 1; p <= pageCount; p++) {
+    doc.setPage(p);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.setTextColor(110, 110, 110);
+    doc.text(`Generated ${fmtDT(Date.now())}`, margin, pageH - 6);
+    doc.text(`Page ${p} of ${pageCount}`, pageW - margin, pageH - 6, {
+      align: 'right'
+    });
+    doc.setTextColor(0, 0, 0);
+  }
+  return doc;
+}
+function useToast() {
+  const [toast, setToast] = useState(null);
+  const show = useCallback((msg, type = 'info') => {
+    setToast({
+      msg,
+      type,
+      id: uid()
+    });
+  }, []);
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 4200);
+    return () => clearTimeout(t);
+  }, [toast]);
+  const node = toast ? React.createElement("div", {
+    className: "no-print",
+    style: {
+      position: 'fixed',
+      left: '50%',
+      bottom: 20,
+      transform: 'translateX(-50%)',
+      zIndex: 80
+    }
+  }, React.createElement("div", {
+    className: "btn",
+    style: {
+      background: toast.type === 'error' ? '#3a1c1c' : toast.type === 'ok' ? '#173a26' : '#232a33',
+      borderColor: toast.type === 'error' ? '#5c2b2b' : toast.type === 'ok' ? '#2b5c3f' : '#39424e',
+      maxWidth: '90vw'
+    }
+  }, toast.msg)) : null;
+  return [node, show];
+}
+function AnnotationModal({
+  img,
+  onCancel,
+  onSave,
+  notify
+}) {
+  const canvasRef = useRef(null);
+  const [tool, setTool] = useState('circle');
+  const [strokes, setStrokes] = useState([]);
+  const drawing = useRef(null);
+  const dims = useMemo(() => scaledDims(img.naturalWidth || img.width, img.naturalHeight || img.height), [img]);
+  const lw = Math.max(3, Math.round(dims.w * 0.006));
+  const drawStroke = (ctx, s) => {
+    ctx.strokeStyle = '#ff2d2d';
+    ctx.lineWidth = lw;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    if (s.type === 'pen') {
+      ctx.beginPath();
+      s.points.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y));
+      ctx.stroke();
+    } else if (s.type === 'circle') {
+      const cx = (s.x0 + s.x1) / 2,
+        cy = (s.y0 + s.y1) / 2,
+        rx = Math.abs(s.x1 - s.x0) / 2,
+        ry = Math.abs(s.y1 - s.y0) / 2;
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, rx || 1, ry || 1, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    } else if (s.type === 'arrow') {
+      ctx.beginPath();
+      ctx.moveTo(s.x0, s.y0);
+      ctx.lineTo(s.x1, s.y1);
+      ctx.stroke();
+      const a = Math.atan2(s.y1 - s.y0, s.x1 - s.x0),
+        h = lw * 4;
+      ctx.beginPath();
+      ctx.moveTo(s.x1, s.y1);
+      ctx.lineTo(s.x1 - h * Math.cos(a - Math.PI / 6), s.y1 - h * Math.sin(a - Math.PI / 6));
+      ctx.moveTo(s.x1, s.y1);
+      ctx.lineTo(s.x1 - h * Math.cos(a + Math.PI / 6), s.y1 - h * Math.sin(a + Math.PI / 6));
+      ctx.stroke();
+    } else if (s.type === 'dot') {
+      const r = lw * 2.4;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
+      ctx.fillStyle = '#ff2d2d';
+      ctx.fill();
+      ctx.lineWidth = Math.max(1, lw * 0.35);
+      ctx.strokeStyle = '#fff';
+      ctx.stroke();
+    }
+  };
+  const redraw = useCallback(extra => {
+    const c = canvasRef.current;
+    if (!c) return;
+    const ctx = c.getContext('2d');
+    ctx.clearRect(0, 0, c.width, c.height);
+    ctx.drawImage(img, 0, 0, c.width, c.height);
+    strokes.forEach(s => drawStroke(ctx, s));
+    if (extra) drawStroke(ctx, extra);
+  }, [strokes, img, lw]);
+  useEffect(() => {
+    const c = canvasRef.current;
+    c.width = dims.w;
+    c.height = dims.h;
+    redraw();
+  }, [dims]);
+  useEffect(() => {
+    redraw();
+  }, [strokes]);
+  const pos = e => {
+    const c = canvasRef.current,
+      r = c.getBoundingClientRect();
+    return {
+      x: (e.clientX - r.left) * (c.width / r.width),
+      y: (e.clientY - r.top) * (c.height / r.height)
+    };
+  };
+  const down = e => {
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const p = pos(e);
+    drawing.current = tool === 'pen' ? {
+      type: 'pen',
+      points: [p]
+    } : tool === 'dot' ? {
+      type: 'dot',
+      x: p.x,
+      y: p.y
+    } : {
+      type: tool,
+      x0: p.x,
+      y0: p.y,
+      x1: p.x,
+      y1: p.y
+    };
+  };
+  const move = e => {
+    if (!drawing.current) return;
+    e.preventDefault();
+    const p = pos(e);
+    if (drawing.current.type === 'pen') drawing.current.points.push(p);else if (drawing.current.type === 'dot') {
+      drawing.current.x = p.x;
+      drawing.current.y = p.y;
+    } else {
+      drawing.current.x1 = p.x;
+      drawing.current.y1 = p.y;
+    }
+    redraw(drawing.current);
+  };
+  const up = e => {
+    if (!drawing.current) return;
+    e.preventDefault();
+    setStrokes(s => [...s, drawing.current]);
+    drawing.current = null;
+  };
+  const save = () => {
+    try {
+      const data = canvasRef.current.toDataURL('image/jpeg', JPEG_Q);
+      onSave(data, strokes.length > 0);
+    } catch (err) {
+      notify('Could not process image: ' + err.message, 'error');
+    }
+  };
+  return React.createElement("div", {
+    className: "no-print",
+    style: {
+      position: 'fixed',
+      inset: 0,
+      background: 'rgba(0,0,0,.8)',
+      zIndex: 70,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: 12
+    }
+  }, React.createElement("div", {
+    style: {
+      background: 'var(--panel)',
+      border: '1px solid var(--line)',
+      borderRadius: 12,
+      padding: 14,
+      maxWidth: 'min(760px,96vw)',
+      maxHeight: '94vh',
+      overflow: 'auto'
+    }
+  }, React.createElement("div", {
+    className: "font-head",
+    style: {
+      fontSize: 20,
+      marginBottom: 8
+    }
+  }, "Mark up the defect"), React.createElement("div", {
+    style: {
+      fontSize: 12,
+      opacity: .65,
+      marginBottom: 10
+    }
+  }, "Draw straight onto the photo to point out the exact defect — skip this if the photo speaks for itself."), React.createElement("div", {
+    className: "no-print",
+    style: {
+      display: 'flex',
+      gap: 6,
+      flexWrap: 'wrap',
+      marginBottom: 10
+    }
+  }, [['circle', 'Circle'], ['arrow', 'Arrow'], ['dot', 'Dot'], ['pen', 'Freehand']].map(([t, l]) => React.createElement("button", {
+    key: t,
+    className: "btn",
+    style: tool === t ? {
+      borderColor: 'var(--vis)',
+      color: 'var(--vis)'
+    } : null,
+    onClick: () => setTool(t)
+  }, l)), React.createElement("button", {
+    className: "btn",
+    onClick: () => setStrokes(s => s.slice(0, -1)),
+    disabled: !strokes.length
+  }, "Undo"), React.createElement("button", {
+    className: "btn",
+    onClick: () => setStrokes([]),
+    disabled: !strokes.length
+  }, "Clear")), React.createElement("canvas", {
+    ref: canvasRef,
+    className: "anno-canvas",
+    onPointerDown: down,
+    onPointerMove: move,
+    onPointerUp: up,
+    onPointerCancel: up
+  }), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      justifyContent: 'flex-end',
+      marginTop: 12
+    }
+  }, React.createElement("button", {
+    className: "btn",
+    onClick: onCancel
+  }, "Cancel"), React.createElement("button", {
+    className: "btn btn-vis",
+    onClick: save
+  }, strokes.length ? 'Save markup' : 'Save (no markup)'))));
+}
+function MiniMap({
+  observations,
+  print
+}) {
+  const tf = mapTransform(observations);
+  if (!tf) return React.createElement("div", {
+    style: {
+      fontSize: 13,
+      opacity: .7,
+      padding: '8px 0'
+    }
+  }, "No GPS-tagged observations yet. Use the GPS button on an observation to place pins.");
+  const {
+    pts,
+    minLa,
+    maxLa,
+    minLo,
+    maxLo
+  } = tf;
+  const W = 600,
+    H = 300;
+  const X = lo => (lo - minLo) / (maxLo - minLo) * W;
+  const Y = la => H - (la - minLa) / (maxLa - minLa) * H;
+  return React.createElement("div", {
+    className: print ? 'pr-map' : ''
+  }, React.createElement("svg", {
+    viewBox: `0 0 ${W} ${H}`,
+    style: {
+      width: '100%',
+      height: 'auto',
+      background: print ? '#fff' : '#0d1116',
+      border: '1px solid ' + (print ? '#000' : 'var(--line)'),
+      borderRadius: print ? 0 : 8
+    }
+  }, [0.25, 0.5, 0.75].map(f => React.createElement("g", {
+    key: f,
+    stroke: print ? '#000' : '#2a323c',
+    strokeWidth: "0.5",
+    opacity: print ? 0.35 : 1
+  }, React.createElement("line", {
+    x1: W * f,
+    y1: "0",
+    x2: W * f,
+    y2: H
+  }), React.createElement("line", {
+    x1: "0",
+    y1: H * f,
+    x2: W,
+    y2: H * f
+  }))), pts.map(p => {
+    const c = (SEVERITIES[p.o.severity] || {}).color || '#888';
+    return React.createElement("g", {
+      key: p.n,
+      transform: `translate(${X(+p.o.lng)},${Y(+p.o.lat)})`
+    }, React.createElement("circle", {
+      r: "12",
+      fill: print ? '#fff' : c,
+      stroke: print ? '#000' : '#000',
+      strokeWidth: print ? 1.2 : 1
+    }), React.createElement("text", {
+      textAnchor: "middle",
+      dy: "4",
+      fontSize: "12",
+      fontWeight: "700",
+      fill: print ? '#000' : '#0a0a0a'
+    }, p.n));
+  }), React.createElement("text", {
+    x: "6",
+    y: H - 8,
+    fontSize: "10",
+    fill: print ? '#000' : '#8a94a0'
+  }, "N up. Schematic relative positions (not to scale).")));
+}
+function ObsCard({
+  obs,
+  n,
+  onEdit,
+  onDelete,
+  notify
+}) {
+  const sev = SEVERITIES[obs.severity] || {};
+  const speak = () => {
+    if (!('speechSynthesis' in window)) return notify('Text-to-speech is not supported in this browser.', 'error');
+    const txt = `Observation ${n}. Severity ${sev.label}. Location ${obs.location || 'not set'}. ${obs.description || ''}. Action required: ${obs.action || 'none'}.`;
+    try {
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.speak(new SpeechSynthesisUtterance(txt));
+    } catch (e) {
+      notify('Could not start speech: ' + e.message, 'error');
+    }
+  };
+  return React.createElement("div", {
+    style: {
+      background: 'var(--panel)',
+      border: '1px solid var(--line)',
+      borderLeft: '4px solid ' + (sev.color || '#888'),
+      borderRadius: 8,
+      padding: 12
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      justifyContent: 'space-between',
+      gap: 8,
+      alignItems: 'flex-start'
+    }
+  }, React.createElement("div", null, React.createElement("span", {
+    className: "font-head",
+    style: {
+      fontSize: 18,
+      marginRight: 8
+    }
+  }, "#", n), React.createElement("span", {
+    style: {
+      fontSize: 12,
+      fontWeight: 700,
+      color: sev.color,
+      background: sev.bg,
+      padding: '2px 8px',
+      borderRadius: 999
+    }
+  }, sev.label)), React.createElement("div", {
+    className: "no-print",
+    style: {
+      display: 'flex',
+      gap: 6
+    }
+  }, React.createElement("button", {
+    className: "btn",
+    style: {
+      padding: '.35rem .6rem'
+    },
+    onClick: speak,
+    title: "Read aloud"
+  }, "Speak"), React.createElement("button", {
+    className: "btn",
+    style: {
+      padding: '.35rem .6rem'
+    },
+    onClick: onEdit
+  }, "Edit"), React.createElement("button", {
+    className: "btn btn-danger",
+    style: {
+      padding: '.35rem .6rem'
+    },
+    onClick: onDelete
+  }, "Delete"))), React.createElement("div", {
+    style: {
+      fontSize: 13,
+      marginTop: 8,
+      lineHeight: 1.5
+    }
+  }, React.createElement("div", null, React.createElement("span", {
+    style: {
+      opacity: .6
+    }
+  }, "Location: "), obs.location || '—', obs.lat ? `  (${(+obs.lat).toFixed(5)}, ${(+obs.lng).toFixed(5)})` : ''), React.createElement("div", {
+    style: {
+      marginTop: 4,
+      whiteSpace: 'pre-wrap'
+    }
+  }, obs.description || '—'), React.createElement("div", {
+    style: {
+      marginTop: 4
+    }
+  }, React.createElement("span", {
+    style: {
+      opacity: .6
+    }
+  }, "Action: "), obs.action || '—')), (obs.photos || []).length > 0 && React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6,
+      marginTop: 8,
+      flexWrap: 'wrap'
+    }
+  }, obs.photos.map((p, i) => React.createElement("img", {
+    key: i,
+    src: p,
+    alt: 'photo ' + (i + 1),
+    style: {
+      width: 96,
+      height: 72,
+      objectFit: 'cover',
+      borderRadius: 6,
+      border: '1px solid var(--line)'
+    }
+  }))));
+}
+function ObsForm({
+  onSubmit,
+  editing,
+  onCancelEdit,
+  notify
+}) {
+  const empty = {
+    location: '',
+    lat: '',
+    lng: '',
+    severity: 'minor',
+    description: '',
+    action: '',
+    photos: [],
+    annotated: []
+  };
+  const [d, setD] = useState(empty);
+  const [busyGPS, setBusyGPS] = useState(false);
+  const [listening, setListening] = useState(false);
+  const [annoTarget, setAnnoTarget] = useState(null);
+  const recRef = useRef(null);
+  useEffect(() => {
+    setD(editing ? {
+      ...empty,
+      ...editing,
+      annotated: editing.annotated || []
+    } : empty);
+  }, [editing]);
+  const set = (k, v) => setD(x => ({
+    ...x,
+    [k]: v
+  }));
+  const getGPS = () => {
+    if (!('geolocation' in navigator)) return notify('Geolocation is not available in this browser.', 'error');
+    setBusyGPS(true);
+    navigator.geolocation.getCurrentPosition(p => {
+      setBusyGPS(false);
+      const la = p.coords.latitude,
+        lo = p.coords.longitude;
+      setD(x => ({
+        ...x,
+        lat: la,
+        lng: lo,
+        location: (x.location ? x.location + ' ' : '') + `(${la.toFixed(5)}, ${lo.toFixed(5)})`
+      }));
+      notify('GPS fix acquired (±' + Math.round(p.coords.accuracy) + ' m).', 'ok');
+    }, err => {
+      setBusyGPS(false);
+      const m = {
+        1: 'Permission denied. Allow location access and retry.',
+        2: 'Position unavailable (no signal / hardware off).',
+        3: 'Timed out getting a fix.'
+      }[err.code] || err.message;
+      notify('GPS failed: ' + m + (window.__EMBEDDED && err.code===1 ? ' Location is blocked in the embedded viewer; open the standalone/hosted app to use GPS.' : ''), 'error');
+    }, {
+      enableHighAccuracy: true,
+      timeout: 15000,
+      maximumAge: 0
+    });
+  };
+  const toggleMic = () => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) return notify('Voice dictation is not supported in this browser (try Chrome).', 'error');
+    if (listening) {
+      try {
+        recRef.current && recRef.current.stop();
+      } catch (e) {}
+      return;
+    }
+    let rec;
+    try {
+      rec = new SR();
+    } catch (e) {
+      return notify('Could not start dictation: ' + e.message, 'error');
+    }
+    rec.lang = 'en-GB';
+    rec.interimResults = false;
+    rec.continuous = true;
+    rec.onresult = e => {
+      let t = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        if (e.results[i].isFinal) t += e.results[i][0].transcript;
+      }
+      if (t) setD(x => ({
+        ...x,
+        description: (x.description ? x.description + ' ' : '') + t.trim()
+      }));
+    };
+    rec.onerror = e => {
+      setListening(false);
+      const m = {
+        'not-allowed': 'Microphone permission denied.',
+        'service-not-allowed': 'Microphone permission denied.',
+        'no-speech': 'No speech detected.',
+        'audio-capture': 'No microphone found.'
+      }[e.error] || e.error;
+      notify('Dictation error: ' + m + (window.__EMBEDDED && (e.error==='not-allowed'||e.error==='service-not-allowed') ? ' The microphone is blocked in the embedded viewer; open the standalone/hosted app to dictate.' : ''), 'error');
+    };
+    rec.onend = () => setListening(false);
+    recRef.current = rec;
+    try {
+      rec.start();
+      setListening(true);
+    } catch (e) {
+      notify('Could not start dictation: ' + e.message, 'error');
+    }
+  };
+  const pickPhoto = async e => {
+    const f = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!f) return;
+    if ((d.photos || []).length >= MAX_PHOTOS) return notify('Maximum ' + MAX_PHOTOS + ' photos per observation.', 'error');
+    try {
+      const img = await fileToImage(f);
+      const data = imageToDataURL(img);
+      setD(x => ({
+        ...x,
+        photos: [...(x.photos || []), data],
+        annotated: [...(x.annotated || []), false]
+      }));
+    } catch (err) {
+      notify(err.message, 'error');
+    }
+  };
+  const openAnnotate = async i => {
+    try {
+      const img = await urlToImage(d.photos[i]);
+      setAnnoTarget({
+        img,
+        index: i
+      });
+    } catch (err) {
+      notify(err.message, 'error');
+    }
+  };
+  const removePhoto = i => setD(x => ({
+    ...x,
+    photos: x.photos.filter((_, j) => j !== i),
+    annotated: (x.annotated || []).filter((_, j) => j !== i)
+  }));
+  const submit = () => {
+    if (!d.description.trim() && !(d.photos || []).length) return notify('Add a description or a photo before saving.', 'error');
+    onSubmit({
+      ...d,
+      id: editing ? editing.id : uid(),
+      createdAt: editing ? editing.createdAt : Date.now()
+    });
+    setD(empty);
+  };
+  return React.createElement("div", {
+    className: "no-print",
+    style: {
+      background: 'var(--panel)',
+      border: '1px solid var(--line)',
+      borderRadius: 10,
+      padding: 14
+    }
+  }, React.createElement("div", {
+    className: "font-head",
+    style: {
+      fontSize: 20,
+      marginBottom: 10
+    }
+  }, editing ? 'Edit observation' : 'New observation'), React.createElement("label", {
+    style: {
+      fontSize: 12,
+      opacity: .7
+    }
+  }, "Location / chainage"), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      marginTop: 4
+    }
+  }, React.createElement("input", {
+    className: "field",
+    value: d.location,
+    onChange: e => set('location', e.target.value),
+    placeholder: "e.g. Forecourt slab, Ch 0+120"
+  }), React.createElement("button", {
+    className: "btn",
+    onClick: getGPS,
+    disabled: busyGPS,
+    title: "Fetch GPS"
+  }, busyGPS ? '…' : 'GPS')), React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: '1fr 1fr',
+      gap: 10,
+      marginTop: 10
+    }
+  }, React.createElement("div", null, React.createElement("label", {
+    style: {
+      fontSize: 12,
+      opacity: .7
+    }
+  }, "Severity"), React.createElement("select", {
+    className: "field",
+    value: d.severity,
+    onChange: e => set('severity', e.target.value),
+    style: {
+      marginTop: 4
+    }
+  }, SEV_ORDER.map(k => React.createElement("option", {
+    key: k,
+    value: k
+  }, SEVERITIES[k].label)))), React.createElement("div", null, React.createElement("label", {
+    style: {
+      fontSize: 12,
+      opacity: .7
+    }
+  }, "Coordinates"), React.createElement("input", {
+    className: "field",
+    value: d.lat ? `${(+d.lat).toFixed(5)}, ${(+d.lng).toFixed(5)}` : '',
+    readOnly: true,
+    placeholder: "none",
+    style: {
+      marginTop: 4
+    }
+  }))), React.createElement("div", {
+    style: {
+      marginTop: 10
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center'
+    }
+  }, React.createElement("label", {
+    style: {
+      fontSize: 12,
+      opacity: .7
+    }
+  }, "Description"), React.createElement("button", {
+    onClick: toggleMic,
+    className: 'btn' + (listening ? ' listening' : ''),
+    style: listening ? {
+      background: '#3a1c1c',
+      borderColor: '#ef4444',
+      color: '#ffb4b4'
+    } : null
+  }, listening ? 'Stop' : 'Dictate')), React.createElement("textarea", {
+    className: "field",
+    rows: "3",
+    value: d.description,
+    onChange: e => set('description', e.target.value),
+    placeholder: "Describe the defect / observation",
+    style: {
+      marginTop: 4
+    }
+  })), React.createElement("div", {
+    style: {
+      marginTop: 10
+    }
+  }, React.createElement("label", {
+    style: {
+      fontSize: 12,
+      opacity: .7
+    }
+  }, "Action required"), React.createElement("input", {
+    className: "field",
+    value: d.action,
+    onChange: e => set('action', e.target.value),
+    placeholder: "e.g. Remove and recast to spec",
+    style: {
+      marginTop: 4
+    }
+  })), React.createElement("div", {
+    style: {
+      marginTop: 10
+    }
+  }, React.createElement("label", {
+    style: {
+      fontSize: 12,
+      opacity: .7
+    }
+  }, "Photos (", (d.photos || []).length, "/", MAX_PHOTOS, ")"), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      opacity: .55,
+      marginTop: 2,
+      marginBottom: 6
+    }
+  }, "Photos are added as-is. Use the mark-up button on a photo to circle, arrow or dot the exact defect — only annotate the ones that need it."), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      flexWrap: 'wrap',
+      alignItems: 'center'
+    }
+  }, (d.photos || []).map((p, i) => React.createElement("div", {
+    key: i,
+    className: "thumb-wrap"
+  }, React.createElement("img", {
+    src: p,
+    alt: "",
+    style: {
+      width: 80,
+      height: 60,
+      objectFit: 'cover',
+      borderRadius: 6,
+      border: '1px solid var(--line)'
+    }
+  }), (d.annotated || [])[i] && React.createElement("span", {
+    className: "anno-badge"
+  }, "marked"), React.createElement("button", {
+    className: "thumb-btn thumb-anno",
+    onClick: () => openAnnotate(i),
+    title: "Mark up this photo"
+  }, "✎"), React.createElement("button", {
+    className: "thumb-btn thumb-del",
+    onClick: () => removePhoto(i),
+    title: "Remove photo"
+  }, "×"))), (d.photos || []).length < MAX_PHOTOS && React.createElement("label", {
+    className: "btn",
+    style: {
+      cursor: 'pointer'
+    }
+  }, "+ Photo", React.createElement("input", {
+    type: "file",
+    accept: "image/*",
+    capture: "environment",
+    onChange: pickPhoto,
+    style: {
+      display: 'none'
+    }
+  })))), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      marginTop: 14
+    }
+  }, React.createElement("button", {
+    className: "btn btn-vis",
+    onClick: submit
+  }, editing ? 'Update observation' : 'Add observation'), editing && React.createElement("button", {
+    className: "btn",
+    onClick: onCancelEdit
+  }, "Cancel edit")), annoTarget && React.createElement(AnnotationModal, {
+    img: annoTarget.img,
+    notify: notify,
+    onCancel: () => setAnnoTarget(null),
+    onSave: (data, hasMarkup) => {
+      const idx = annoTarget.index;
+      setD(x => ({
+        ...x,
+        photos: x.photos.map((ph, j) => j === idx ? data : ph),
+        annotated: (x.annotated || []).map((a, j) => j === idx ? (a || hasMarkup) : a)
+      }));
+      setAnnoTarget(null);
+    }
+  }));
+}
+function PrintReport({
+  report
+}) {
+  const m = report.meta;
+  return React.createElement("div", {
+    className: "pr-wrap print-only"
+  }, React.createElement("h1", {
+    className: "font-head",
+    style: {
+      fontSize: 28,
+      margin: '0 0 2px'
+    }
+  }, "SITE INSPECTION & SNAG REPORT"), React.createElement("div", {
+    style: {
+      fontSize: 12,
+      marginBottom: 10
+    }
+  }, m.projectName || 'Untitled project'), React.createElement("table", {
+    className: "pr-table",
+    style: {
+      marginBottom: 12
+    }
+  }, React.createElement("tbody", null, React.createElement("tr", null, React.createElement("th", null, "Project"), React.createElement("td", null, m.projectName || '—'), React.createElement("th", null, "Date"), React.createElement("td", null, m.date || '—')), React.createElement("tr", null, React.createElement("th", null, "Inspector"), React.createElement("td", null, m.inspector || '—'), React.createElement("th", null, "Weather"), React.createElement("td", null, m.weather || '—', m.temperature ? ` / ${m.temperature} °C` : '')), React.createElement("tr", null, React.createElement("th", null, "Contractor"), React.createElement("td", null, m.contractor || '—'), React.createElement("th", null, "Client"), React.createElement("td", null, m.client || '—')))), React.createElement("h3", {
+    className: "font-head",
+    style: {
+      fontSize: 15,
+      margin: '0 0 6px'
+    }
+  }, "Location plan"), React.createElement(MiniMap, {
+    observations: report.observations,
+    print: true
+  }), React.createElement("h3", {
+    className: "font-head",
+    style: {
+      fontSize: 15,
+      margin: '14px 0 6px'
+    }
+  }, "Observations (", report.observations.length, ")"), report.observations.length === 0 && React.createElement("div", {
+    style: {
+      fontSize: 12
+    }
+  }, "No observations recorded."), report.observations.map((o, i) => {
+    const s = SEVERITIES[o.severity] || {};
+    return React.createElement("div", {
+      className: "pr-snag",
+      key: o.id
+    }, React.createElement("div", {
+      className: "pr-snag-head"
+    }, "#", i + 1, " \xA0 ", React.createElement("span", {
+      className: "sev-chip",
+      style: {
+        border: '1px solid',
+        padding: '1px 6px',
+        fontSize: 11
+      }
+    }, s.label), " \xA0 ", o.location || ''), React.createElement("div", {
+      className: "pr-snag-body"
+    }, o.lat ? React.createElement("div", null, React.createElement("b", null, "Coords:"), " ", (+o.lat).toFixed(5), ", ", (+o.lng).toFixed(5)) : null, React.createElement("div", {
+      style: {
+        whiteSpace: 'pre-wrap',
+        margin: '2px 0'
+      }
+    }, React.createElement("b", null, "Description:"), " ", o.description || '—'), React.createElement("div", null, React.createElement("b", null, "Action required:"), " ", o.action || '—'), (o.photos || []).length > 0 && React.createElement("div", {
+      className: "pr-photos"
+    }, o.photos.map((p, j) => React.createElement("img", {
+      key: j,
+      src: p,
+      alt: ""
+    })))));
+  }), React.createElement("div", {
+    className: "pr-sig"
+  }, React.createElement("div", null, React.createElement("div", {
+    className: "line"
+  }, "Inspector: ", m.inspector || '')), React.createElement("div", null, React.createElement("div", {
+    className: "line"
+  }, "Contractor representative")), React.createElement("div", null, React.createElement("div", {
+    className: "line"
+  }, "Client representative"))), React.createElement("div", {
+    style: {
+      fontSize: 9,
+      marginTop: 16,
+      color: '#000'
+    }
+  }, "Generated ", fmtDT(Date.now()), ". Severity colours shown as text in print for monochrome fidelity."));
+}
+function App() {
+  const [toastNode, notify] = useToast();
+  const [reports, setReports] = useState([]);
+  const [activeId, setActiveId] = useState(null);
+  const [editing, setEditing] = useState(null);
+  const [ready, setReady] = useState(false);
+  const [dbOk, setDbOk] = useState(true);
+  const [pdfBusy, setPdfBusy] = useState(false);
+  useEffect(() => {
+    (async () => {
+      try {
+        const all = await idbGetAll();
+        if (all.length) {
+          all.sort((a, b) => b.updatedAt - a.updatedAt);
+          setReports(all);
+          setActiveId(all[0].id);
+        } else {
+          const b = blankReport();
+          setReports([b]);
+          setActiveId(b.id);
+          await idbPut(b).catch(() => {});
+        }
+      } catch (e) {
+        setDbOk(false);
+        const b = blankReport();
+        setReports([b]);
+        setActiveId(b.id);
+        notify('IndexedDB unavailable, data will not persist this session: ' + e.message, 'error');
+      }
+      setReady(true);
+    })();
+  }, []);
+  const active = reports.find(r => r.id === activeId);
+  useEffect(() => {
+    if (!ready || !active || !dbOk) return;
+    const t = setTimeout(() => {
+      idbPut(active).catch(e => notify('Save failed: ' + e.message, 'error'));
+    }, 500);
+    return () => clearTimeout(t);
+  }, [active, ready, dbOk]);
+  const patchActive = fn => setReports(rs => rs.map(r => r.id === activeId ? {
+    ...fn(r),
+    updatedAt: Date.now()
+  } : r));
+  const setMeta = (k, v) => patchActive(r => ({
+    ...r,
+    meta: {
+      ...r.meta,
+      [k]: v
+    }
+  }));
+  const addObs = o => {
+    patchActive(r => ({
+      ...r,
+      observations: editing ? r.observations.map(x => x.id === o.id ? o : x) : [...r.observations, o]
+    }));
+    setEditing(null);
+    notify(editing ? 'Observation updated.' : 'Observation added.', 'ok');
+  };
+  const delObs = id => {
+    if (!confirm('Delete this observation?')) return;
+    patchActive(r => ({
+      ...r,
+      observations: r.observations.filter(x => x.id !== id)
+    }));
+  };
+  const newReport = () => {
+    const b = blankReport();
+    setReports(rs => [b, ...rs]);
+    setActiveId(b.id);
+    setEditing(null);
+    if (dbOk) idbPut(b).catch(() => {});
+  };
+  const delReport = async () => {
+    if (!active) return;
+    if (!confirm('Delete the entire report "' + (active.meta.projectName || 'Untitled') + '" and all its observations?')) return;
+    const id = active.id;
+    if (dbOk) await idbDel(id).catch(() => {});
+    setReports(rs => {
+      const left = rs.filter(r => r.id !== id);
+      if (!left.length) {
+        const b = blankReport();
+        setActiveId(b.id);
+        if (dbOk) idbPut(b).catch(() => {});
+        return [b];
+      }
+      setActiveId(left[0].id);
+      return left;
+    });
+  };
+  const exportCSV = () => {
+    if (!active) return;
+    saveFile((active.meta.projectName || 'snag-list').replace(/[^\w-]+/g, '_') + '.csv', new Blob([toCSV(active)], {
+      type: 'text/csv;charset=utf-8'
+    }), notify);
+  };
+  const exportPDF = async () => {
+    if (!active || pdfBusy) return;
+    setPdfBusy(true);
+    try {
+      const doc = await buildPDF(active, notify);
+      if (doc) {
+        const blob = doc.output('blob');
+        await saveFile((active.meta.projectName || 'snag-report').replace(/[^\w-]+/g, '_') + '.pdf', blob, notify);
+      }
+    } catch (e) {
+      notify('PDF export failed: ' + e.message, 'error');
+    }
+    setPdfBusy(false);
+  };
+  const backup = () => {
+    saveFile('snag-backup-' + todayISO() + '.json', new Blob([JSON.stringify(reports, null, 2)], {
+      type: 'application/json'
+    }), notify);
+  };
+  const restore = async e => {
+    const f = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!f) return;
+    try {
+      const txt = await f.text();
+      const data = JSON.parse(txt);
+      const arr = Array.isArray(data) ? data : [data];
+      for (const r of arr) {
+        if (r && r.id && r.meta) {
+          if (dbOk) await idbPut(r).catch(() => {});
+        }
+      }
+      const all = dbOk ? await idbGetAll() : arr;
+      all.sort((a, b) => b.updatedAt - a.updatedAt);
+      setReports(all);
+      setActiveId(all[0].id);
+      notify('Restored ' + arr.length + ' report(s).', 'ok');
+    } catch (err) {
+      notify('Restore failed: ' + err.message, 'error');
+    }
+  };
+  if (!ready) return React.createElement("div", {
+    style: {
+      padding: 40,
+      textAlign: 'center',
+      opacity: .6
+    }
+  }, "Loading…");
+  const m = active.meta;
+  const counts = SEV_ORDER.map(k => ({
+    k,
+    n: active.observations.filter(o => o.severity === k).length
+  }));
+  return React.createElement("div", null, React.createElement("div", {
+    className: "no-print",
+    style: {
+      maxWidth: 900,
+      margin: '0 auto',
+      padding: '14px 14px 60px'
+    }
+  }, React.createElement("header", {
+    style: {
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'flex-end',
+      gap: 10,
+      flexWrap: 'wrap',
+      marginBottom: 14
+    }
+  }, React.createElement("div", null, React.createElement("h1", {
+    className: "font-head",
+    style: {
+      fontSize: 30,
+      margin: 0,
+      lineHeight: 1
+    }
+  }, "SNAG", React.createElement("span", {
+    style: {
+      color: 'var(--vis)'
+    }
+  }, "LOG")), React.createElement("div", {
+    style: {
+      fontSize: 12,
+      opacity: .6
+    }
+  }, "Site inspection & defect register")), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("button", {
+    className: "btn",
+    onClick: newReport
+  }, "New report"), React.createElement("button", {
+    className: "btn",
+    onClick: exportCSV
+  }, "CSV"), React.createElement("button", {
+    className: "btn",
+    onClick: backup
+  }, "Backup"), React.createElement("label", {
+    className: "btn",
+    style: {
+      cursor: 'pointer'
+    }
+  }, "Restore", React.createElement("input", {
+    type: "file",
+    accept: "application/json",
+    onChange: restore,
+    style: {
+      display: 'none'
+    }
+  })), React.createElement("button", {
+    className: "btn",
+    onClick: () => window.print(),
+    title: "Open the browser print dialog"
+  }, "Print"), React.createElement("button", {
+    className: "btn btn-vis",
+    onClick: exportPDF,
+    disabled: pdfBusy
+  }, pdfBusy ? 'Building…' : 'Export PDF'))), reports.length > 1 && React.createElement("div", {
+    style: {
+      marginBottom: 12,
+      display: 'flex',
+      gap: 8,
+      alignItems: 'center'
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 12,
+      opacity: .7
+    }
+  }, "Report"), React.createElement("select", {
+    className: "field",
+    style: {
+      maxWidth: 420
+    },
+    value: activeId,
+    onChange: e => {
+      setActiveId(e.target.value);
+      setEditing(null);
+    }
+  }, reports.map(r => React.createElement("option", {
+    key: r.id,
+    value: r.id
+  }, (r.meta.projectName || 'Untitled') + ' · ' + r.meta.date + ' · ' + r.observations.length + ' obs'))), React.createElement("button", {
+    className: "btn btn-danger",
+    onClick: delReport
+  }, "Delete report")), React.createElement("section", {
+    style: {
+      background: 'var(--panel)',
+      border: '1px solid var(--line)',
+      borderRadius: 10,
+      padding: 14,
+      marginBottom: 14
+    }
+  }, React.createElement("div", {
+    className: "font-head",
+    style: {
+      fontSize: 20,
+      marginBottom: 10
+    }
+  }, "Report details"), React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))',
+      gap: 10
+    }
+  }, [['projectName', 'Project name'], ['inspector', 'Inspector'], ['contractor', 'Contractor'], ['client', 'Client']].map(([k, l]) => React.createElement("div", {
+    key: k
+  }, React.createElement("label", {
+    style: {
+      fontSize: 12,
+      opacity: .7
+    }
+  }, l), React.createElement("input", {
+    className: "field",
+    style: {
+      marginTop: 4
+    },
+    value: m[k],
+    onChange: e => setMeta(k, e.target.value)
+  }))), React.createElement("div", null, React.createElement("label", {
+    style: {
+      fontSize: 12,
+      opacity: .7
+    }
+  }, "Date"), React.createElement("input", {
+    type: "date",
+    className: "field",
+    style: {
+      marginTop: 4
+    },
+    value: m.date,
+    onChange: e => setMeta('date', e.target.value)
+  })), React.createElement("div", null, React.createElement("label", {
+    style: {
+      fontSize: 12,
+      opacity: .7
+    }
+  }, "Weather"), React.createElement("select", {
+    className: "field",
+    style: {
+      marginTop: 4
+    },
+    value: m.weather,
+    onChange: e => setMeta('weather', e.target.value)
+  }, WEATHER.map(w => React.createElement("option", {
+    key: w
+  }, w)))), React.createElement("div", null, React.createElement("label", {
+    style: {
+      fontSize: 12,
+      opacity: .7
+    }
+  }, "Temperature (°C)"), React.createElement("input", {
+    type: "number",
+    className: "field",
+    style: {
+      marginTop: 4
+    },
+    value: m.temperature,
+    onChange: e => setMeta('temperature', e.target.value),
+    placeholder: "e.g. 24"
+  })))), React.createElement("section", {
+    style: {
+      background: 'var(--panel)',
+      border: '1px solid var(--line)',
+      borderRadius: 10,
+      padding: 14,
+      marginBottom: 14
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginBottom: 8,
+      flexWrap: 'wrap',
+      gap: 8
+    }
+  }, React.createElement("div", {
+    className: "font-head",
+    style: {
+      fontSize: 20
+    }
+  }, "Site map"), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6,
+      flexWrap: 'wrap'
+    }
+  }, counts.map(c => React.createElement("span", {
+    key: c.k,
+    style: {
+      fontSize: 11,
+      fontWeight: 700,
+      color: SEVERITIES[c.k].color,
+      background: SEVERITIES[c.k].bg,
+      padding: '2px 8px',
+      borderRadius: 999
+    }
+  }, SEVERITIES[c.k].label, ": ", c.n)))), React.createElement(MiniMap, {
+    observations: active.observations
+  })), React.createElement(ObsForm, {
+    onSubmit: addObs,
+    editing: editing,
+    onCancelEdit: () => setEditing(null),
+    notify: notify
+  }), React.createElement("section", {
+    style: {
+      marginTop: 14
+    }
+  }, React.createElement("div", {
+    className: "font-head",
+    style: {
+      fontSize: 20,
+      marginBottom: 8
+    }
+  }, "Observations (", active.observations.length, ")"), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 10
+    }
+  }, active.observations.length === 0 && React.createElement("div", {
+    style: {
+      opacity: .6,
+      fontSize: 13
+    }
+  }, "Nothing logged yet. Add your first observation above."), active.observations.map((o, i) => React.createElement(ObsCard, {
+    key: o.id,
+    obs: o,
+    n: i + 1,
+    notify: notify,
+    onEdit: () => {
+      setEditing(o);
+      window.scrollTo({
+        top: 0,
+        behavior: 'smooth'
+      });
+    },
+    onDelete: () => delObs(o.id)
+  }))))), React.createElement(PrintReport, {
+    report: active
+  }), toastNode);
+}
+const root = ReactDOM.createRoot(document.getElementById('root'));
+window.addEventListener('error', e => {
+  const el = document.getElementById('root');
+  if (el && !el.hasChildNodes()) el.innerHTML = '<div style="padding:24px;color:#ffb4b4;font-family:sans-serif">App failed to start: ' + (e.message || '') + '. Check network access to the CDN scripts.</div>';
+});
+root.render(React.createElement(App, null));
+</script>
+</body>
+</html>
