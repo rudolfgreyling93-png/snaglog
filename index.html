@@ -728,8 +728,9 @@ function AnnotationModal({
   const up = e => {
     if (!drawing.current) return;
     e.preventDefault();
-    setStrokes(s => [...s, drawing.current]);
+    const finished = drawing.current;
     drawing.current = null;
+    setStrokes(s => [...s, finished]);
   };
   const save = () => {
     try {
