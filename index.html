@@ -182,6 +182,7 @@ function blankReport() {
     },
     observations: [],
     documents: [],
+    locality: null,
     createdAt: Date.now(),
     updatedAt: Date.now()
   };
@@ -311,6 +312,116 @@ function mapTransform(observations) {
     maxLo
   };
 }
+const blobToDataURL = blob => new Promise((res, rej) => {
+  const r = new FileReader();
+  r.onload = () => res(r.result);
+  r.onerror = () => rej(new Error('Could not read map image data.'));
+  r.readAsDataURL(blob);
+});
+async function fetchEsriExport(service, bbox, w, h, transparent) {
+  const url = 'https://server.arcgisonline.com/ArcGIS/rest/services/' + service + '/MapServer/export?bbox=' + bbox.join(',') + '&bboxSR=3857&imageSR=3857&size=' + w + ',' + h + '&format=' + (transparent ? 'png32' : 'jpg') + '&transparent=' + (transparent ? 'true' : 'false') + '&f=image';
+  const res = await fetch(url);
+  if (!res.ok) throw new Error('Map image request failed (' + res.status + ')');
+  const blob = await res.blob();
+  if (!blob.type.startsWith('image/')) {
+    let m = '';
+    try {
+      m = JSON.parse(await blob.text()).error.message;
+    } catch (e) {}
+    throw new Error('map service error' + (m ? ': ' + m : ''));
+  }
+  return urlToImage(await blobToDataURL(blob));
+}
+function imageToDataURLMax(img, maxW, q) {
+  const nw = img.naturalWidth || img.width,
+    nh = img.naturalHeight || img.height;
+  const r = nw > maxW ? maxW / nw : 1;
+  const c = document.createElement('canvas');
+  c.width = Math.round(nw * r);
+  c.height = Math.round(nh * r);
+  c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+  return c.toDataURL('image/jpeg', q);
+}
+async function captureLocalityView(map) {
+  map.invalidateSize();
+  const size = map.getSize();
+  if (!size.x || !size.y) throw new Error('the map is not visible yet - wait a moment and try again');
+  const sf = Math.max(1, Math.min(2, 1300 / size.x));
+  const w = Math.round(size.x * sf),
+    h = Math.round(size.y * sf);
+  const b = map.getBounds();
+  const crs = L.CRS.EPSG3857;
+  const sw = crs.project(b.getSouthWest()),
+    ne = crs.project(b.getNorthEast());
+  const bbox = [sw.x, sw.y, ne.x, ne.y];
+  const base = await fetchEsriExport('World_Imagery', bbox, w, h, false);
+  let labels = null;
+  try {
+    labels = await fetchEsriExport('Reference/World_Boundaries_and_Places', bbox, w, h, true);
+  } catch (e) {}
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  const ctx = c.getContext('2d');
+  ctx.drawImage(base, 0, 0, w, h);
+  if (labels) ctx.drawImage(labels, 0, 0, w, h);
+  const center = map.getCenter();
+  const fs = Math.max(11, Math.round(w / 75));
+  const halo = (text, x, y, align) => {
+    ctx.font = 'bold ' + fs + 'px Arial, sans-serif';
+    ctx.textAlign = align;
+    ctx.lineWidth = Math.max(3, fs / 4);
+    ctx.strokeStyle = 'rgba(0,0,0,.85)';
+    ctx.strokeText(text, x, y);
+    ctx.fillStyle = '#fff';
+    ctx.fillText(text, x, y);
+  };
+  // scale bar (metres per pixel corrected for latitude)
+  const mpp = (ne.x - sw.x) / w * Math.cos(center.lat * Math.PI / 180);
+  const target = mpp * w / 5;
+  const pow = Math.pow(10, Math.floor(Math.log10(target)));
+  const nice = [1, 2, 5, 10].map(m => m * pow).filter(v => v <= target).pop() || pow;
+  const barPx = nice / mpp;
+  const bx = Math.round(fs * 1.2),
+    by = h - Math.round(fs * 2.6);
+  ctx.lineWidth = Math.max(4, fs / 3);
+  ctx.strokeStyle = 'rgba(0,0,0,.85)';
+  ctx.beginPath();
+  ctx.moveTo(bx, by - fs * .5);
+  ctx.lineTo(bx, by);
+  ctx.lineTo(bx + barPx, by);
+  ctx.lineTo(bx + barPx, by - fs * .5);
+  ctx.stroke();
+  ctx.lineWidth = Math.max(2, fs / 6);
+  ctx.strokeStyle = '#fff';
+  ctx.stroke();
+  halo(nice >= 1000 ? nice / 1000 + ' km' : nice + ' m', bx, by - fs * .9, 'left');
+  // north arrow
+  const nx = w - Math.round(fs * 2.2),
+    ny = Math.round(fs * 3.4);
+  ctx.beginPath();
+  ctx.moveTo(nx, ny - fs * 1.6);
+  ctx.lineTo(nx - fs * .8, ny + fs * .5);
+  ctx.lineTo(nx, ny);
+  ctx.lineTo(nx + fs * .8, ny + fs * .5);
+  ctx.closePath();
+  ctx.fillStyle = '#fff';
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 2;
+  ctx.fill();
+  ctx.stroke();
+  halo('N', nx, ny - fs * 1.9, 'center');
+  halo('Imagery © Esri, Maxar, Earthstar Geographics', w - Math.round(fs * .8), h - Math.round(fs * .8), 'right');
+  return {
+    image: c.toDataURL('image/jpeg', 0.85),
+    center: {
+      lat: center.lat,
+      lng: center.lng
+    },
+    zoom: map.getZoom(),
+    capturedAt: Date.now()
+  };
+}
 async function fetchStaticMapImage(observations, w, h) {
   const tf = mapTransform(observations);
   if (!tf) return null;
@@ -346,6 +457,12 @@ async function buildPDF(report, notify) {
   try {
     mapImg = await fetchStaticMapImage(report.observations, 1100, 330);
   } catch (e) {}
+  let locImg = null;
+  if (report.locality && report.locality.image) {
+    try {
+      locImg = await urlToImage(report.locality.image);
+    } catch (e) {}
+  }
   const allPhotos = [];
   report.observations.forEach(o => (o.photos || []).forEach(p => allPhotos.push(p)));
   const imgDims = {};
@@ -439,21 +556,48 @@ async function buildPDF(report, notify) {
     });
   });
   y += rows.length * rowH + 8;
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(12);
-  ensure(14);
-  doc.text('Location plan', margin, y);
-  y += 4;
-  const mapH = 55;
-  ensure(mapH + 4);
-  doc.setDrawColor(0);
-  doc.rect(margin, y, contentW, mapH);
+  if (locImg) {
+    const natW = locImg.naturalWidth || locImg.width,
+      natH = locImg.naturalHeight || locImg.height;
+    let drawW = contentW,
+      lh = drawW * natH / natW;
+    if (lh > 95) {
+      lh = 95;
+      drawW = lh * natW / natH;
+    }
+    ensure(lh + 16);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(12);
+    doc.setTextColor(0, 0, 0);
+    doc.text('Site locality', margin, y);
+    y += 4;
+    try {
+      doc.addImage(report.locality.image, 'JPEG', margin, y, drawW, lh, undefined, 'FAST');
+    } catch (e) {}
+    doc.setDrawColor(0);
+    doc.rect(margin, y, drawW, lh);
+    y += lh + 4;
+    if (report.locality.note) {
+      doc.setFont('helvetica', 'italic');
+      doc.setFontSize(8.5);
+      const nl = doc.splitTextToSize(report.locality.note, contentW);
+      ensure(nl.length * 4 + 2);
+      doc.text(nl, margin, y);
+      y += nl.length * 4;
+      doc.setFont('helvetica', 'normal');
+    }
+    y += 6;
+  }
   const tf = mapTransform(report.observations);
-  if (!tf) {
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(9);
-    doc.text('No GPS-tagged observations recorded.', margin + 3, y + mapH / 2);
-  } else {
+  const mapH = 55;
+  if (tf) {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(12);
+    ensure(14 + mapH);
+    doc.text('Observation location plan', margin, y);
+    y += 4;
+    doc.setDrawColor(0);
+    doc.rect(margin, y, contentW, mapH);
     if (mapImg && mapImg.dataURL) {
       try {
         doc.addImage(mapImg.dataURL, 'PNG', margin, y, contentW, mapH);
@@ -478,9 +622,9 @@ async function buildPDF(report, notify) {
         align: 'center'
       });
     });
+    y += mapH + 10;
   }
   doc.setTextColor(0, 0, 0);
-  y += mapH + 10;
   ensure(10);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(12);
@@ -627,7 +771,7 @@ function useToast() {
   }, []);
   useEffect(() => {
     if (!toast) return;
-    const t = setTimeout(() => setToast(null), 4200);
+    const t = setTimeout(() => setToast(null), toast.type === 'error' ? 9000 : 4200);
     return () => clearTimeout(t);
   }, [toast]);
   const node = toast ? React.createElement("div", {
@@ -985,6 +1129,7 @@ function AerialMap({
       }
       const map = leafletRef.current,
         group = groupRef.current;
+      map.invalidateSize();
       group.clearLayers();
       pts.forEach(p => {
         const sev = SEVERITIES[p.o.severity] || {};
@@ -1039,13 +1184,219 @@ function AerialMap({
   }, mapErr), React.createElement("div", {
     ref: mapDivRef,
     style: {
-      height: 320,
+      height: pts.length ? 320 : 0,
+      display: pts.length ? 'block' : 'none',
       borderRadius: 8,
       overflow: 'hidden',
       border: '1px solid var(--line)',
       background: '#0d1116'
     }
   }));
+}
+const h = React.createElement;
+const lblStyle = {
+  fontSize: 12,
+  opacity: .7
+};
+function LocalityModal({
+  initial,
+  focus,
+  onCancel,
+  onSave,
+  notify
+}) {
+  const divRef = useRef(null);
+  const mapRef = useRef(null);
+  const [q, setQ] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState(initial && initial.note || '');
+  useEffect(() => {
+    if (typeof L === 'undefined' || !divRef.current) {
+      notify('Map library failed to load. Check your connection and reload.', 'error');
+      return;
+    }
+    const start = initial && initial.center ? [initial.center.lat, initial.center.lng] : focus ? [focus.lat, focus.lng] : [-28.5, 25];
+    const z = initial && initial.zoom ? initial.zoom : focus ? 17 : 6;
+    const map = L.map(divRef.current, {
+      zoomControl: true,
+      attributionControl: true
+    }).setView(start, z);
+    L.tileLayer(ESRI_IMAGERY_URL, {
+      maxZoom: 20,
+      maxNativeZoom: 19,
+      attribution: ESRI_ATTRIBUTION
+    }).addTo(map);
+    L.tileLayer(ESRI_LABELS_URL, {
+      maxZoom: 20,
+      maxNativeZoom: 19,
+      opacity: 0.85
+    }).addTo(map);
+    mapRef.current = map;
+    setTimeout(() => map.invalidateSize(), 80);
+    return () => {
+      map.remove();
+      mapRef.current = null;
+    };
+  }, []);
+  const search = async () => {
+    if (!q.trim() || !mapRef.current) return;
+    setBusy(true);
+    try {
+      const r = await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' + encodeURIComponent(q.trim()));
+      const j = await r.json();
+      if (!j.length) notify('Place not found. Try a street, suburb or town name.', 'error');else mapRef.current.setView([+j[0].lat, +j[0].lon], 17);
+    } catch (e) {
+      notify('Search failed: ' + e.message, 'error');
+    }
+    setBusy(false);
+  };
+  const locate = () => {
+    if (!('geolocation' in navigator)) return notify('Geolocation is not available in this browser.', 'error');
+    setBusy(true);
+    navigator.geolocation.getCurrentPosition(p => {
+      setBusy(false);
+      if (mapRef.current) mapRef.current.setView([p.coords.latitude, p.coords.longitude], 18);
+    }, err => {
+      setBusy(false);
+      notify('Could not get your location (' + (err.message || 'denied') + '). Search for the site instead.', 'error');
+    }, {
+      enableHighAccuracy: true,
+      timeout: 15000
+    });
+  };
+  const capture = async () => {
+    if (!mapRef.current) return;
+    setBusy(true);
+    try {
+      const res = await captureLocalityView(mapRef.current);
+      onSave(Object.assign(res, {
+        note: note.trim(),
+        source: 'capture'
+      }));
+    } catch (e) {
+      notify('Could not capture the map: ' + e.message + '. An internet connection is needed.', 'error');
+      setBusy(false);
+    }
+  };
+  return h("div", {
+    className: "no-print",
+    style: {
+      position: 'fixed',
+      inset: 0,
+      background: 'rgba(0,0,0,.8)',
+      zIndex: 60,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: 10
+    }
+  }, h("div", {
+    style: {
+      background: 'var(--panel)',
+      border: '1px solid var(--line)',
+      borderRadius: 12,
+      padding: 14,
+      width: 'min(900px,97vw)',
+      maxHeight: '96vh',
+      overflow: 'auto'
+    }
+  }, h("div", {
+    className: "font-head",
+    style: {
+      fontSize: 20,
+      marginBottom: 4
+    }
+  }, "Capture site locality"), h("div", {
+    style: {
+      fontSize: 12,
+      opacity: .65,
+      marginBottom: 8
+    }
+  }, "Find the site, then pan and zoom until the frame shows the locality you want in the report. The image saved is exactly what you see, without any snag markers."), h("div", {
+    style: {
+      display: 'flex',
+      gap: 6,
+      marginBottom: 8,
+      flexWrap: 'wrap'
+    }
+  }, h("input", {
+    className: "field",
+    style: {
+      flex: '1 1 200px',
+      width: 'auto'
+    },
+    value: q,
+    onChange: e => setQ(e.target.value),
+    onKeyDown: e => {
+      if (e.key === 'Enter') search();
+    },
+    placeholder: "Search a street, suburb or town"
+  }), h("button", {
+    className: "btn",
+    onClick: search,
+    disabled: busy
+  }, "Search"), h("button", {
+    className: "btn",
+    onClick: locate,
+    disabled: busy,
+    title: "Centre the map on where you are"
+  }, "📍 My location")), h("div", {
+    style: {
+      position: 'relative'
+    }
+  }, h("div", {
+    ref: divRef,
+    style: {
+      height: 'min(56vh,460px)',
+      minHeight: 260,
+      borderRadius: 8,
+      overflow: 'hidden',
+      border: '1px solid var(--line)',
+      background: '#0d1116'
+    }
+  }), h("div", {
+    style: {
+      position: 'absolute',
+      left: '50%',
+      top: '50%',
+      width: 26,
+      height: 26,
+      marginLeft: -13,
+      marginTop: -13,
+      pointerEvents: 'none',
+      zIndex: 500,
+      opacity: .8,
+      background: 'linear-gradient(#fff,#fff) center/2px 100% no-repeat, linear-gradient(#fff,#fff) center/100% 2px no-repeat',
+      filter: 'drop-shadow(0 0 2px #000)'
+    }
+  })), h("label", {
+    style: Object.assign({
+      display: 'block',
+      marginTop: 10
+    }, lblStyle)
+  }, "Caption (optional)"), h("input", {
+    className: "field",
+    style: {
+      marginTop: 4
+    },
+    value: note,
+    onChange: e => setNote(e.target.value),
+    placeholder: "e.g. Site locality — Crestway Office Park, Persequor"
+  }), h("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      justifyContent: 'flex-end',
+      marginTop: 12
+    }
+  }, h("button", {
+    className: "btn",
+    onClick: onCancel
+  }, "Cancel"), h("button", {
+    className: "btn btn-vis",
+    onClick: capture,
+    disabled: busy
+  }, busy ? 'Working…' : 'Capture this view'))));
 }
 function ObsCard({
   obs,
@@ -1590,7 +1941,32 @@ function PrintReport({
       fontSize: 15,
       margin: '0 0 6px'
     }
-  }, "Location plan"), React.createElement(MiniMap, {
+  }, "Site locality"), report.locality && report.locality.image && React.createElement("div", null, React.createElement("img", {
+    src: report.locality.image,
+    alt: "Site locality",
+    style: {
+      width: '100%',
+      maxHeight: 360,
+      objectFit: 'contain',
+      border: '1px solid #000'
+    }
+  }), report.locality.note && React.createElement("div", {
+    style: {
+      fontSize: 10,
+      fontStyle: 'italic',
+      marginTop: 3
+    }
+  }, report.locality.note)), !(report.locality && report.locality.image) && React.createElement("div", {
+    style: {
+      fontSize: 12
+    }
+  }, "No site locality image."), mapTransform(report.observations) && React.createElement("h3", {
+    className: "font-head",
+    style: {
+      fontSize: 15,
+      margin: '14px 0 6px'
+    }
+  }, "Observation location plan"), mapTransform(report.observations) && React.createElement(MiniMap, {
     observations: report.observations,
     print: true,
     staticMap: staticMap
@@ -1682,6 +2058,7 @@ function App() {
   const [ready, setReady] = useState(false);
   const [dbOk, setDbOk] = useState(true);
   const [pdfBusy, setPdfBusy] = useState(false);
+  const [localityOpen, setLocalityOpen] = useState(false);
   const [printMap, setPrintMap] = useState(null);
   const [printBusy, setPrintBusy] = useState(false);
   useEffect(() => {
@@ -1741,6 +2118,27 @@ function App() {
       ...r,
       observations: r.observations.filter(x => x.id !== id)
     }));
+  };
+  const setLocality = loc => patchActive(r => ({
+    ...r,
+    locality: loc
+  }));
+  const uploadLocality = async e => {
+    const f = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!f) return;
+    try {
+      const img = await fileToImage(f);
+      setLocality({
+        image: imageToDataURLMax(img, 1600, 0.85),
+        source: 'upload',
+        capturedAt: Date.now(),
+        note: active.locality && active.locality.note || ''
+      });
+      notify('Site locality image added.', 'ok');
+    } catch (err) {
+      notify(err.message, 'error');
+    }
   };
   const addDocuments = async files => {
     const list = Array.from(files || []);
@@ -2115,6 +2513,91 @@ function App() {
       marginBottom: 14
     }
   }, React.createElement("div", {
+    className: "font-head",
+    style: {
+      fontSize: 20,
+      marginBottom: 4
+    }
+  }, "Site locality"), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      opacity: .55,
+      marginBottom: 8
+    }
+  }, "An aerial view of where the site is, shown in the report. It does not show observation positions and does not need GPS — capture it from the map or upload a screenshot."), active.locality && active.locality.image && React.createElement("div", {
+    style: {
+      marginBottom: 10
+    }
+  }, React.createElement("img", {
+    src: active.locality.image,
+    alt: "Site locality",
+    style: {
+      width: '100%',
+      maxHeight: 340,
+      objectFit: 'contain',
+      background: '#000',
+      borderRadius: 8,
+      border: '1px solid var(--line)',
+      display: 'block'
+    }
+  }), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      alignItems: 'center',
+      marginTop: 6,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("input", {
+    className: "field",
+    style: {
+      flex: '1 1 220px',
+      width: 'auto'
+    },
+    value: active.locality.note || '',
+    onChange: e => setLocality({
+      ...active.locality,
+      note: e.target.value
+    }),
+    placeholder: "Caption (optional)"
+  }), React.createElement("span", {
+    style: {
+      fontSize: 11,
+      opacity: .6
+    }
+  }, active.locality.source === 'capture' ? 'Captured from aerial map' : 'Uploaded image', active.locality.capturedAt ? ' · ' + fmtDT(active.locality.capturedAt) : ''))), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("button", {
+    className: "btn",
+    onClick: () => setLocalityOpen(true)
+  }, active.locality && active.locality.image ? '🗺 Recapture from map' : '🗺 Capture from map'), React.createElement("label", {
+    className: "btn",
+    style: {
+      cursor: 'pointer'
+    }
+  }, active.locality && active.locality.image ? 'Replace with screenshot' : '+ Upload screenshot', React.createElement("input", {
+    type: "file",
+    accept: "image/*",
+    onChange: uploadLocality,
+    style: {
+      display: 'none'
+    }
+  })), active.locality && active.locality.image && React.createElement("button", {
+    className: "btn btn-danger",
+    onClick: () => setLocality(null)
+  }, "Remove"))), React.createElement("section", {
+    style: {
+      background: 'var(--panel)',
+      border: '1px solid var(--line)',
+      borderRadius: 10,
+      padding: 14,
+      marginBottom: 14
+    }
+  }, React.createElement("div", {
     style: {
       display: 'flex',
       justifyContent: 'space-between',
@@ -2188,6 +2671,22 @@ function App() {
   }))))), React.createElement(PrintReport, {
     report: active,
     staticMap: printMap
+  }), localityOpen && React.createElement(LocalityModal, {
+    initial: active.locality,
+    focus: (() => {
+      const t = mapTransform(active.observations);
+      return t ? {
+        lat: (t.minLa + t.maxLa) / 2,
+        lng: (t.minLo + t.maxLo) / 2
+      } : null;
+    })(),
+    notify: notify,
+    onCancel: () => setLocalityOpen(false),
+    onSave: loc => {
+      setLocality(loc);
+      setLocalityOpen(false);
+      notify('Site locality captured.', 'ok');
+    }
   }), toastNode);
 }
 window.addEventListener('error', e => {
