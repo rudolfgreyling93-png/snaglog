@@ -2165,7 +2165,7 @@ function ObsForm({
   };
   const [d, setD] = useState(empty);
   const [busyGPS, setBusyGPS] = useState(false);
-  const [listening, setListening] = useState(false);
+  const [listenField, setListenField] = useState(null);
   const [annoTarget, setAnnoTarget] = useState(null);
   const recRef = useRef(null);
   useEffect(() => {
@@ -2209,14 +2209,14 @@ function ObsForm({
       maximumAge: 0
     });
   };
-  const toggleMic = () => {
+  const toggleMic = field => {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) return notify('Voice dictation is not supported in this browser (try Chrome).', 'error');
-    if (listening) {
+    if (listenField) {
       try {
         recRef.current && recRef.current.stop();
       } catch (e) {}
-      return;
+      if (listenField === field) return;
     }
     let rec;
     try {
@@ -2234,11 +2234,11 @@ function ObsForm({
       }
       if (t) setD(x => ({
         ...x,
-        description: (x.description ? x.description + ' ' : '') + t.trim()
+        [field]: (x[field] ? x[field] + ' ' : '') + t.trim()
       }));
     };
     rec.onerror = e => {
-      setListening(false);
+      setListenField(null);
       const m = {
         'not-allowed': 'Microphone permission denied.',
         'service-not-allowed': 'Microphone permission denied.',
@@ -2247,15 +2247,24 @@ function ObsForm({
       }[e.error] || e.error;
       notify('Dictation error: ' + m + (window.__EMBEDDED && (e.error==='not-allowed'||e.error==='service-not-allowed') ? ' The microphone is blocked in the embedded viewer; open the standalone/hosted app to dictate.' : ''), 'error');
     };
-    rec.onend = () => setListening(false);
+    rec.onend = () => setListenField(null);
     recRef.current = rec;
     try {
       rec.start();
-      setListening(true);
+      setListenField(field);
     } catch (e) {
       notify('Could not start dictation: ' + e.message, 'error');
     }
   };
+  const micBtn = field => React.createElement("button", {
+    onClick: () => toggleMic(field),
+    className: 'btn' + (listenField === field ? ' listening' : ''),
+    style: listenField === field ? {
+      background: '#3a1c1c',
+      borderColor: '#ef4444',
+      color: '#ffb4b4'
+    } : null
+  }, listenField === field ? 'Stop' : 'Dictate');
   const pickPhoto = async e => {
     const f = e.target.files && e.target.files[0];
     e.target.value = '';
@@ -2393,15 +2402,7 @@ function ObsForm({
       fontSize: 12,
       opacity: .7
     }
-  }, "Description"), React.createElement("button", {
-    onClick: toggleMic,
-    className: 'btn' + (listening ? ' listening' : ''),
-    style: listening ? {
-      background: '#3a1c1c',
-      borderColor: '#ef4444',
-      color: '#ffb4b4'
-    } : null
-  }, listening ? 'Stop' : 'Dictate')), React.createElement("textarea", {
+  }, "Description"), micBtn('description')), React.createElement("textarea", {
     className: "field",
     rows: "3",
     value: d.description,
@@ -2414,12 +2415,18 @@ function ObsForm({
     style: {
       marginTop: 10
     }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center'
+    }
   }, React.createElement("label", {
     style: {
       fontSize: 12,
       opacity: .7
     }
-  }, "Action required"), React.createElement("input", {
+  }, "Action required"), micBtn('action')), React.createElement("input", {
     className: "field",
     value: d.action,
     onChange: e => set('action', e.target.value),
