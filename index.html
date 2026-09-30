@@ -187,6 +187,9 @@ function blankReport() {
     updatedAt: Date.now()
   };
 }
+const padArr = (a, n, fill) => Array.from({
+  length: n
+}, (_, j) => a && a[j] !== undefined ? a[j] : fill);
 function fileToImage(file) {
   return new Promise((res, rej) => {
     if (!file || !file.type || !file.type.startsWith('image/')) return rej(new Error('Not an image file.'));
@@ -793,7 +796,635 @@ function useToast() {
   }, toast.msg)) : null;
   return [node, show];
 }
+const MARK_COLORS = ['#ff2d2d', '#ffd60a', '#ffffff', '#111111', '#22c55e', '#38bdf8'];
 function AnnotationModal({
+  img,
+  baseUrl,
+  initialMarks,
+  onCancel,
+  onSave,
+  notify
+}) {
+  const h = React.createElement;
+  const canvasRef = useRef(null);
+  const dragRef = useRef(null);
+  const dims = useMemo(() => scaledDims(img.naturalWidth || img.width, img.naturalHeight || img.height), [img]);
+  const cw = dims.w,
+    ch = dims.h;
+  const lw = Math.max(3, Math.round(cw * 0.006));
+  const newId = () => Math.random().toString(36).slice(2, 9);
+  const fromNorm = m => {
+    const s = Object.assign({}, m, {
+      id: newId()
+    });
+    if (s.type === 'circle' || s.type === 'arrow') {
+      s.x0 *= cw;
+      s.y0 *= ch;
+      s.x1 *= cw;
+      s.y1 *= ch;
+    } else if (s.type === 'dot') {
+      s.x *= cw;
+      s.y *= ch;
+    } else if (s.type === 'pen') {
+      s.pts = (s.pts || []).map(p => ({
+        x: p.x * cw,
+        y: p.y * ch
+      }));
+    }
+    return s;
+  };
+  const toNorm = s => {
+    const m = {
+      type: s.type,
+      c: s.c,
+      k: s.k
+    };
+    if (s.type === 'circle' || s.type === 'arrow') {
+      m.x0 = s.x0 / cw;
+      m.y0 = s.y0 / ch;
+      m.x1 = s.x1 / cw;
+      m.y1 = s.y1 / ch;
+    } else if (s.type === 'dot') {
+      m.x = s.x / cw;
+      m.y = s.y / ch;
+    } else if (s.type === 'pen') {
+      m.pts = s.pts.map(p => ({
+        x: p.x / cw,
+        y: p.y / ch
+      }));
+    }
+    return m;
+  };
+  const [shapes, setShapes] = useState(() => (initialMarks || []).map(fromNorm));
+  const [sel, setSel] = useState(null);
+  const [tool, setTool] = useState(initialMarks && initialMarks.length ? 'select' : 'circle');
+  const [pen, setPen] = useState({
+    c: '#ff2d2d',
+    k: 1
+  });
+  const [hist, setHist] = useState([]);
+  const dotR = s => lw * 2.4 * (s.k || 1);
+  const drawShape = (ctx, s) => {
+    const wpx = lw * (s.k || 1);
+    ctx.strokeStyle = s.c;
+    ctx.fillStyle = s.c;
+    ctx.lineWidth = wpx;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.setLineDash([]);
+    if (s.type === 'pen') {
+      ctx.beginPath();
+      s.pts.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y));
+      ctx.stroke();
+    } else if (s.type === 'circle') {
+      ctx.beginPath();
+      ctx.ellipse((s.x0 + s.x1) / 2, (s.y0 + s.y1) / 2, Math.abs(s.x1 - s.x0) / 2 || 1, Math.abs(s.y1 - s.y0) / 2 || 1, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    } else if (s.type === 'arrow') {
+      ctx.beginPath();
+      ctx.moveTo(s.x0, s.y0);
+      ctx.lineTo(s.x1, s.y1);
+      ctx.stroke();
+      const a = Math.atan2(s.y1 - s.y0, s.x1 - s.x0),
+        hd = wpx * 4;
+      ctx.beginPath();
+      ctx.moveTo(s.x1, s.y1);
+      ctx.lineTo(s.x1 - hd * Math.cos(a - Math.PI / 6), s.y1 - hd * Math.sin(a - Math.PI / 6));
+      ctx.moveTo(s.x1, s.y1);
+      ctx.lineTo(s.x1 - hd * Math.cos(a + Math.PI / 6), s.y1 - hd * Math.sin(a + Math.PI / 6));
+      ctx.stroke();
+    } else if (s.type === 'dot') {
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, dotR(s), 0, Math.PI * 2);
+      ctx.fill();
+      ctx.lineWidth = Math.max(1, wpx * 0.35);
+      ctx.strokeStyle = s.c === '#ffffff' || s.c === '#ffd60a' ? '#000' : '#fff';
+      ctx.stroke();
+    }
+  };
+  const bboxOf = s => {
+    if (s.type === 'circle' || s.type === 'arrow') return {
+      x0: Math.min(s.x0, s.x1),
+      y0: Math.min(s.y0, s.y1),
+      x1: Math.max(s.x0, s.x1),
+      y1: Math.max(s.y0, s.y1)
+    };
+    if (s.type === 'dot') {
+      const r = dotR(s);
+      return {
+        x0: s.x - r,
+        y0: s.y - r,
+        x1: s.x + r,
+        y1: s.y + r
+      };
+    }
+    const xs = s.pts.map(p => p.x),
+      ys = s.pts.map(p => p.y);
+    return {
+      x0: Math.min(...xs),
+      y0: Math.min(...ys),
+      x1: Math.max(...xs),
+      y1: Math.max(...ys)
+    };
+  };
+  const handlesOf = s => {
+    if (s.type === 'arrow') return [{
+      key: 'a',
+      x: s.x0,
+      y: s.y0
+    }, {
+      key: 'b',
+      x: s.x1,
+      y: s.y1
+    }];
+    if (s.type === 'dot') return [{
+      key: 'r',
+      x: s.x + dotR(s),
+      y: s.y
+    }];
+    const b = bboxOf(s);
+    return [{
+      key: 'nw',
+      x: b.x0,
+      y: b.y0
+    }, {
+      key: 'ne',
+      x: b.x1,
+      y: b.y0
+    }, {
+      key: 'se',
+      x: b.x1,
+      y: b.y1
+    }, {
+      key: 'sw',
+      x: b.x0,
+      y: b.y1
+    }];
+  };
+  const segDist = (p, a, b) => {
+    const dx = b.x - a.x,
+      dy = b.y - a.y,
+      l2 = dx * dx + dy * dy;
+    let t = l2 ? ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2 : 0;
+    t = Math.max(0, Math.min(1, t));
+    return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+  };
+  const hitShape = (s, p, tol) => {
+    const pad = lw * (s.k || 1) / 2;
+    if (s.type === 'dot') return Math.hypot(p.x - s.x, p.y - s.y) <= dotR(s) + tol;
+    if (s.type === 'arrow') return segDist(p, {
+      x: s.x0,
+      y: s.y0
+    }, {
+      x: s.x1,
+      y: s.y1
+    }) <= tol + pad;
+    if (s.type === 'circle') {
+      const cx = (s.x0 + s.x1) / 2,
+        cy = (s.y0 + s.y1) / 2,
+        rx = Math.abs(s.x1 - s.x0) / 2 || 1,
+        ry = Math.abs(s.y1 - s.y0) / 2 || 1;
+      const r = Math.hypot((p.x - cx) / rx, (p.y - cy) / ry);
+      return Math.abs(r - 1) * Math.min(rx, ry) <= tol + pad || r < 1 && Math.min(rx, ry) <= tol * 2;
+    }
+    if (s.pts.length === 1) return Math.hypot(p.x - s.pts[0].x, p.y - s.pts[0].y) <= tol + pad;
+    for (let i = 1; i < s.pts.length; i++) if (segDist(p, s.pts[i - 1], s.pts[i]) <= tol + pad) return true;
+    return false;
+  };
+  const applyHandle = (o, key, p) => {
+    if (o.type === 'arrow') return key === 'a' ? Object.assign({}, o, {
+      x0: p.x,
+      y0: p.y
+    }) : Object.assign({}, o, {
+      x1: p.x,
+      y1: p.y
+    });
+    if (o.type === 'dot') return Object.assign({}, o, {
+      k: Math.max(0.3, Math.min(10, Math.hypot(p.x - o.x, p.y - o.y) / (lw * 2.4)))
+    });
+    const b = bboxOf(o);
+    const ox = key.indexOf('w') >= 0 ? b.x1 : b.x0,
+      oy = key.indexOf('n') >= 0 ? b.y1 : b.y0;
+    if (o.type === 'circle') {
+      let nx = p.x,
+        ny = p.y;
+      if (Math.abs(nx - ox) < 4) nx = ox + (nx >= ox ? 4 : -4);
+      if (Math.abs(ny - oy) < 4) ny = oy + (ny >= oy ? 4 : -4);
+      return Object.assign({}, o, {
+        x0: ox,
+        y0: oy,
+        x1: nx,
+        y1: ny
+      });
+    }
+    const cx = key.indexOf('w') >= 0 ? b.x0 : b.x1,
+      cy = key.indexOf('n') >= 0 ? b.y0 : b.y1;
+    const sx = Math.max(0.05, (p.x - ox) / (cx - ox || 1)),
+      sy = Math.max(0.05, (p.y - oy) / (cy - oy || 1));
+    return Object.assign({}, o, {
+      pts: o.pts.map(q => ({
+        x: ox + (q.x - ox) * sx,
+        y: oy + (q.y - oy) * sy
+      }))
+    });
+  };
+  const moveShape = (o, dx, dy) => {
+    if (o.type === 'circle' || o.type === 'arrow') return Object.assign({}, o, {
+      x0: o.x0 + dx,
+      y0: o.y0 + dy,
+      x1: o.x1 + dx,
+      y1: o.y1 + dy
+    });
+    if (o.type === 'dot') return Object.assign({}, o, {
+      x: o.x + dx,
+      y: o.y + dy
+    });
+    return Object.assign({}, o, {
+      pts: o.pts.map(q => ({
+        x: q.x + dx,
+        y: q.y + dy
+      }))
+    });
+  };
+  const scaleOf = () => {
+    const c = canvasRef.current;
+    if (!c) return 1;
+    const r = c.getBoundingClientRect();
+    return r.width ? c.width / r.width : 1;
+  };
+  useEffect(() => {
+    const c = canvasRef.current;
+    if (!c) return;
+    c.width = cw;
+    c.height = ch;
+  }, [cw, ch]);
+  useEffect(() => {
+    const c = canvasRef.current;
+    if (!c) return;
+    const ctx = c.getContext('2d');
+    ctx.clearRect(0, 0, c.width, c.height);
+    ctx.drawImage(img, 0, 0, c.width, c.height);
+    shapes.forEach(s => drawShape(ctx, s));
+    const cur = shapes.find(s => s.id === sel);
+    if (cur) {
+      const sc = scaleOf(),
+        b = bboxOf(cur),
+        pad = 6 * sc;
+      ctx.save();
+      ctx.lineWidth = Math.max(1.5, 1.5 * sc);
+      ctx.strokeStyle = '#00e5ff';
+      ctx.setLineDash([6 * sc, 4 * sc]);
+      ctx.strokeRect(b.x0 - pad, b.y0 - pad, b.x1 - b.x0 + pad * 2, b.y1 - b.y0 + pad * 2);
+      ctx.setLineDash([]);
+      handlesOf(cur).forEach(hd => {
+        ctx.beginPath();
+        ctx.arc(hd.x, hd.y, 8 * sc, 0, Math.PI * 2);
+        ctx.fillStyle = '#00e5ff';
+        ctx.fill();
+        ctx.lineWidth = 2 * sc;
+        ctx.strokeStyle = '#003c44';
+        ctx.stroke();
+      });
+      ctx.restore();
+    }
+  }, [shapes, sel, tool, img]);
+  const pushHist = () => {
+    const snap = JSON.stringify(shapes);
+    setHist(hh => hh.concat([snap]).slice(-40));
+  };
+  const undo = () => {
+    const last = hist[hist.length - 1];
+    if (last === undefined) return;
+    setShapes(JSON.parse(last));
+    setHist(hh => hh.slice(0, -1));
+    setSel(null);
+  };
+  const del = () => {
+    if (!sel) return;
+    pushHist();
+    const id = sel;
+    setShapes(l => l.filter(s => s.id !== id));
+    setSel(null);
+  };
+  const dup = () => {
+    const cur = shapes.find(s => s.id === sel);
+    if (!cur) return;
+    pushHist();
+    const copy = Object.assign({}, moveShape(cur, 24, 24), {
+      id: newId()
+    });
+    setShapes(l => l.concat([copy]));
+    setSel(copy.id);
+  };
+  const clearAll = () => {
+    if (!shapes.length) return;
+    pushHist();
+    setShapes([]);
+    setSel(null);
+  };
+  useEffect(() => {
+    const f = e => {
+      const tg = document.activeElement && document.activeElement.tagName;
+      if ((e.key === 'Delete' || e.key === 'Backspace') && sel && tg !== 'INPUT' && tg !== 'TEXTAREA') {
+        e.preventDefault();
+        del();
+      }
+    };
+    window.addEventListener('keydown', f);
+    return () => window.removeEventListener('keydown', f);
+  }, [sel, shapes]);
+  const pos = e => {
+    const c = canvasRef.current,
+      r = c.getBoundingClientRect();
+    return {
+      x: (e.clientX - r.left) * (c.width / r.width),
+      y: (e.clientY - r.top) * (c.height / r.height)
+    };
+  };
+  const down = e => {
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const p = pos(e),
+      sc = scaleOf();
+    if (tool === 'select') {
+      const cur = shapes.find(s => s.id === sel);
+      if (cur) {
+        const hd = handlesOf(cur).find(x => Math.hypot(x.x - p.x, x.y - p.y) <= 18 * sc);
+        if (hd) {
+          pushHist();
+          dragRef.current = {
+            mode: 'handle',
+            id: cur.id,
+            orig: cur,
+            key: hd.key
+          };
+          return;
+        }
+      }
+      for (let i = shapes.length - 1; i >= 0; i--) {
+        if (hitShape(shapes[i], p, 14 * sc)) {
+          pushHist();
+          setSel(shapes[i].id);
+          dragRef.current = {
+            mode: 'move',
+            id: shapes[i].id,
+            orig: shapes[i],
+            start: p
+          };
+          return;
+        }
+      }
+      setSel(null);
+      return;
+    }
+    pushHist();
+    const id = newId();
+    let ns;
+    if (tool === 'pen') ns = {
+      id,
+      type: 'pen',
+      c: pen.c,
+      k: pen.k,
+      pts: [p]
+    };else if (tool === 'dot') ns = {
+      id,
+      type: 'dot',
+      c: pen.c,
+      k: pen.k,
+      x: p.x,
+      y: p.y
+    };else ns = {
+      id,
+      type: tool,
+      c: pen.c,
+      k: pen.k,
+      x0: p.x,
+      y0: p.y,
+      x1: p.x,
+      y1: p.y
+    };
+    dragRef.current = {
+      mode: 'draw',
+      id,
+      orig: ns,
+      pts: tool === 'pen' ? [p] : null
+    };
+    setShapes(l => l.concat([ns]));
+    setSel(id);
+  };
+  const move = e => {
+    const d = dragRef.current;
+    if (!d) return;
+    e.preventDefault();
+    const p = pos(e);
+    let ns;
+    if (d.mode === 'move') ns = moveShape(d.orig, p.x - d.start.x, p.y - d.start.y);else if (d.mode === 'handle') ns = applyHandle(d.orig, d.key, p);else if (d.orig.type === 'pen') {
+      const last = d.pts[d.pts.length - 1];
+      if (Math.hypot(p.x - last.x, p.y - last.y) >= 1.5) d.pts.push(p);
+      ns = Object.assign({}, d.orig, {
+        pts: d.pts.slice()
+      });
+    } else if (d.orig.type === 'dot') ns = Object.assign({}, d.orig, {
+      x: p.x,
+      y: p.y
+    });else ns = Object.assign({}, d.orig, {
+      x1: p.x,
+      y1: p.y
+    });
+    const id = d.id;
+    d.latest = ns;
+    setShapes(l => l.map(s => s.id === id ? ns : s));
+  };
+  const up = e => {
+    const d = dragRef.current;
+    if (!d) return;
+    e.preventDefault();
+    dragRef.current = null;
+    if (d.mode === 'draw') {
+      const s = d.latest || d.orig;
+      const tiny = (s.type === 'circle' || s.type === 'arrow') && Math.hypot(s.x1 - s.x0, s.y1 - s.y0) < 6 * scaleOf() || s.type === 'pen' && s.pts.length < 2;
+      if (tiny) {
+        const id = d.id;
+        setShapes(l => l.filter(x => x.id !== id));
+        setSel(null);
+      }
+    }
+  };
+  const setStyle = patch => {
+    setPen(pp => Object.assign({}, pp, patch));
+    if (sel) {
+      const id = sel;
+      setShapes(l => l.map(s => s.id === id ? Object.assign({}, s, patch) : s));
+    }
+  };
+  const save = () => {
+    try {
+      const c = document.createElement('canvas');
+      c.width = cw;
+      c.height = ch;
+      const ctx = c.getContext('2d');
+      ctx.drawImage(img, 0, 0, cw, ch);
+      shapes.forEach(s => drawShape(ctx, s));
+      onSave(c.toDataURL('image/jpeg', JPEG_Q), shapes.map(toNorm), baseUrl);
+    } catch (err) {
+      notify('Could not process image: ' + err.message, 'error');
+    }
+  };
+  const curSel = shapes.find(s => s.id === sel);
+  const shownK = curSel ? curSel.k || 1 : pen.k;
+  const shownC = curSel ? curSel.c : pen.c;
+  const toolBtn = (t, label) => h("button", {
+    key: t,
+    className: "btn btn-sm",
+    style: tool === t ? {
+      borderColor: 'var(--vis)',
+      color: 'var(--vis)'
+    } : null,
+    onClick: () => setTool(t)
+  }, label);
+  return h("div", {
+    className: "no-print",
+    style: {
+      position: 'fixed',
+      inset: 0,
+      background: 'rgba(0,0,0,.8)',
+      zIndex: 70,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: 12
+    }
+  }, h("div", {
+    style: {
+      background: 'var(--panel)',
+      border: '1px solid var(--line)',
+      borderRadius: 12,
+      padding: 14,
+      maxWidth: 'min(780px,96vw)',
+      maxHeight: '94vh',
+      overflow: 'auto'
+    }
+  }, h("div", {
+    className: "font-head",
+    style: {
+      fontSize: 20,
+      marginBottom: 4
+    }
+  }, "Mark up the photo"), h("div", {
+    style: {
+      fontSize: 12,
+      opacity: .65,
+      marginBottom: 8
+    }
+  }, "Draw with a tool, then use ✥ Select to move a mark or drag its round handles to resize it. Pick a colour or thickness for the selected mark. Skip this if the photo speaks for itself."), h("div", {
+    style: {
+      display: 'flex',
+      gap: 6,
+      flexWrap: 'wrap',
+      marginBottom: 8
+    }
+  }, toolBtn('select', '✥ Select / move'), toolBtn('circle', 'Circle'), toolBtn('arrow', 'Arrow'), toolBtn('dot', 'Dot'), toolBtn('pen', 'Freehand')), h("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      flexWrap: 'wrap',
+      alignItems: 'center',
+      marginBottom: 8
+    }
+  }, MARK_COLORS.map(col => h("button", {
+    key: col,
+    title: col,
+    onClick: () => {
+      if (sel) pushHist();
+      setStyle({
+        c: col
+      });
+    },
+    style: {
+      width: 26,
+      height: 26,
+      borderRadius: 999,
+      background: col,
+      cursor: 'pointer',
+      border: shownC === col ? '3px solid var(--vis)' : '2px solid #6b7684'
+    }
+  })), h("label", {
+    style: {
+      fontSize: 12,
+      opacity: .75,
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6
+    }
+  }, "Thickness", h("input", {
+    type: "range",
+    min: "0.5",
+    max: "4",
+    step: "0.25",
+    value: shownK,
+    onPointerDown: () => {
+      if (sel) pushHist();
+    },
+    onChange: e => setStyle({
+      k: +e.target.value
+    }),
+    style: {
+      width: 110
+    }
+  })), h("button", {
+    className: "btn btn-sm",
+    onClick: dup,
+    disabled: !curSel
+  }, "Duplicate"), h("button", {
+    className: "btn btn-sm btn-danger",
+    onClick: del,
+    disabled: !curSel
+  }, "Delete"), h("button", {
+    className: "btn btn-sm",
+    onClick: undo,
+    disabled: !hist.length
+  }, "Undo"), h("button", {
+    className: "btn btn-sm",
+    onClick: clearAll,
+    disabled: !shapes.length
+  }, "Clear all")), h("canvas", {
+    ref: canvasRef,
+    className: "anno-canvas",
+    style: {
+      cursor: tool === 'select' ? 'default' : 'crosshair'
+    },
+    onPointerDown: down,
+    onPointerMove: move,
+    onPointerUp: up,
+    onPointerCancel: up
+  }), h("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginTop: 12,
+      flexWrap: 'wrap'
+    }
+  }, h("span", {
+    style: {
+      fontSize: 12,
+      opacity: .6
+    }
+  }, shapes.length + (shapes.length === 1 ? ' mark' : ' marks') + (curSel ? ' · 1 selected' : '')), h("div", {
+    style: {
+      display: 'flex',
+      gap: 8
+    }
+  }, h("button", {
+    className: "btn",
+    onClick: onCancel
+  }, "Cancel"), h("button", {
+    className: "btn btn-vis",
+    onClick: save
+  }, shapes.length ? 'Save markup' : 'Save (no markup)')))));
+}
+function AnnotationModalLegacy({
   img,
   onCancel,
   onSave,
@@ -1528,7 +2159,9 @@ function ObsForm({
     description: '',
     action: '',
     photos: [],
-    annotated: []
+    annotated: [],
+    photoSrc: [],
+    photoMarks: []
   };
   const [d, setD] = useState(empty);
   const [busyGPS, setBusyGPS] = useState(false);
@@ -1539,7 +2172,9 @@ function ObsForm({
     setD(editing ? {
       ...empty,
       ...editing,
-      annotated: editing.annotated || []
+      annotated: editing.annotated || [],
+      photoSrc: editing.photoSrc || [],
+      photoMarks: editing.photoMarks || []
     } : empty);
   }, [editing]);
   const set = (k, v) => setD(x => ({
@@ -1629,21 +2264,29 @@ function ObsForm({
     try {
       const img = await fileToImage(f);
       const data = imageToDataURL(img);
-      setD(x => ({
-        ...x,
-        photos: [...(x.photos || []), data],
-        annotated: [...(x.annotated || []), false]
-      }));
+      setD(x => {
+        const n = (x.photos || []).length;
+        return {
+          ...x,
+          photos: [...(x.photos || []), data],
+          annotated: [...padArr(x.annotated, n, false), false],
+          photoSrc: [...padArr(x.photoSrc, n, null), null],
+          photoMarks: [...padArr(x.photoMarks, n, []), []]
+        };
+      });
     } catch (err) {
       notify(err.message, 'error');
     }
   };
   const openAnnotate = async i => {
     try {
-      const img = await urlToImage(d.photos[i]);
+      const baseUrl = (d.photoSrc || [])[i] || d.photos[i];
+      const img = await urlToImage(baseUrl);
       setAnnoTarget({
         img,
-        index: i
+        index: i,
+        baseUrl,
+        marks: (d.photoMarks || [])[i] || []
       });
     } catch (err) {
       notify(err.message, 'error');
@@ -1652,7 +2295,9 @@ function ObsForm({
   const removePhoto = i => setD(x => ({
     ...x,
     photos: x.photos.filter((_, j) => j !== i),
-    annotated: (x.annotated || []).filter((_, j) => j !== i)
+    annotated: (x.annotated || []).filter((_, j) => j !== i),
+    photoSrc: (x.photoSrc || []).filter((_, j) => j !== i),
+    photoMarks: (x.photoMarks || []).filter((_, j) => j !== i)
   }));
   const submit = () => {
     if (!d.description.trim() && !(d.photos || []).length) return notify('Add a description or a photo before saving.', 'error');
@@ -1867,15 +2512,22 @@ function ObsForm({
     onClick: onCancelEdit
   }, "Cancel edit")), annoTarget && React.createElement(AnnotationModal, {
     img: annoTarget.img,
+    baseUrl: annoTarget.baseUrl,
+    initialMarks: annoTarget.marks,
     notify: notify,
     onCancel: () => setAnnoTarget(null),
-    onSave: (data, hasMarkup) => {
+    onSave: (flat, mk, base) => {
       const idx = annoTarget.index;
-      setD(x => ({
-        ...x,
-        photos: x.photos.map((ph, j) => j === idx ? data : ph),
-        annotated: (x.annotated || []).map((a, j) => j === idx ? (a || hasMarkup) : a)
-      }));
+      setD(x => {
+        const n = x.photos.length;
+        return {
+          ...x,
+          photos: x.photos.map((ph, j) => j === idx ? flat : ph),
+          annotated: padArr(x.annotated, n, false).map((a, j) => j === idx ? mk.length > 0 : a),
+          photoSrc: padArr(x.photoSrc, n, null).map((s, j) => j === idx ? mk.length ? base : null : s),
+          photoMarks: padArr(x.photoMarks, n, []).map((k, j) => j === idx ? mk : k)
+        };
+      });
       setAnnoTarget(null);
     }
   }));
