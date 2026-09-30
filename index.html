@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>Site Inspection & Snag Report</title>
+<title>Site Inspection & Weekly Report</title>
 <link rel="icon" href="assets/logo.png">
 <link rel="apple-touch-icon" href="assets/logo.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -181,12 +181,15 @@ function blankReport() {
       client: ''
     },
     observations: [],
+    generalObservations: [],
+    summaryNote: '',
     documents: [],
     locality: null,
     createdAt: Date.now(),
     updatedAt: Date.now()
   };
 }
+const OBS_CATEGORIES = ['General', 'Progress', 'Safety', 'Quality', 'Access', 'Weather', 'Other'];
 const padArr = (a, n, fill) => Array.from({
   length: n
 }, (_, j) => a && a[j] !== undefined ? a[j] : fill);
@@ -247,9 +250,22 @@ function imageToDataURL(img) {
   ctx.drawImage(img, 0, 0, dims.w, dims.h);
   return c.toDataURL('image/jpeg', JPEG_Q);
 }
+function summaryCounts(report) {
+  const counts = SEV_ORDER.map(k => ({
+    k,
+    label: SEVERITIES[k].label,
+    n: report.observations.filter(o => o.severity === k).length
+  }));
+  return {
+    counts,
+    total: report.observations.length,
+    generalTotal: (report.generalObservations || []).length
+  };
+}
 function toCSV(report) {
-  const rows = [['#', 'Location / chainage', 'Latitude', 'Longitude', 'Severity', 'Description', 'Action required', 'Photos', 'Logged']];
-  report.observations.forEach((o, i) => rows.push([i + 1, o.location || '', o.lat || '', o.lng || '', (SEVERITIES[o.severity] || {}).label || o.severity, o.description || '', o.action || '', (o.photos || []).length, fmtDT(o.createdAt)]));
+  const rows = [['#', 'Type', 'Location / chainage', 'Latitude', 'Longitude', 'Severity / Category', 'Description', 'Action required', 'Photos', 'Logged']];
+  report.observations.forEach((o, i) => rows.push([i + 1, 'Observation', o.location || '', o.lat || '', o.lng || '', (SEVERITIES[o.severity] || {}).label || o.severity, o.description || '', o.action || '', (o.photos || []).length, fmtDT(o.createdAt)]));
+  (report.generalObservations || []).forEach((o, i) => rows.push([report.observations.length + i + 1, 'General', '', '', '', o.category || 'General', o.text || '', '', 0, fmtDT(o.createdAt)]));
   const esc = v => {
     const s = String(v == null ? '' : v);
     return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
@@ -534,7 +550,7 @@ async function buildPDF(report, notify) {
   y += 8;
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(18);
-  doc.text('SITE INSPECTION & SNAG REPORT', margin, y);
+  doc.text('SITE INSPECTION & WEEKLY REPORT', margin, y);
   y += 8;
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(11);
@@ -558,7 +574,30 @@ async function buildPDF(report, notify) {
       x += cols[ci];
     });
   });
-  y += rows.length * rowH + 8;
+  y += rows.length * rowH + 6;
+  {
+    const sc = summaryCounts(report);
+    ensure(9);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    const parts = ['Summary:', sc.total + ' observation' + (sc.total === 1 ? '' : 's')].concat(sc.counts.map(c => c.label + ': ' + c.n));
+    if (sc.generalTotal) parts.push(sc.generalTotal + ' general note' + (sc.generalTotal === 1 ? '' : 's'));
+    doc.text(parts.join('  |  '), margin, y + 2);
+    y += 9;
+    if (report.summaryNote && report.summaryNote.trim()) {
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10);
+      ensure(6);
+      doc.text('Overview', margin, y);
+      y += 4.5;
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(9);
+      const nl = doc.splitTextToSize(report.summaryNote.trim(), contentW);
+      ensure(nl.length * 4.4 + 4);
+      doc.text(nl, margin, y);
+      y += nl.length * 4.4 + 6;
+    }
+  }
   if (locImg) {
     const natW = locImg.naturalWidth || locImg.width,
       natH = locImg.naturalHeight || locImg.height;
@@ -713,6 +752,31 @@ async function buildPDF(report, notify) {
       }
     }
     y = blockTop + blockH + 4;
+  }
+  if ((report.generalObservations || []).length) {
+    ensure(10);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(12);
+    doc.text(`General observations (${report.generalObservations.length})`, margin, y);
+    y += 6;
+    report.generalObservations.forEach((o, i) => {
+      doc.setFontSize(9);
+      const lines = doc.splitTextToSize(o.text || '', contentW - 6);
+      const blockH2 = 6 + lines.length * 4.6 + 3;
+      ensure(blockH2 + 4);
+      const top = y;
+      doc.setDrawColor(0);
+      doc.setLineWidth(0.2);
+      doc.rect(margin, top, contentW, blockH2);
+      doc.setFont('helvetica', 'bold');
+      doc.text(`#${i + 1}  ${o.category || 'General'}`, margin + 2, top + 4.5);
+      doc.setFont('helvetica', 'normal');
+      doc.text(fmtDT(o.createdAt), margin + contentW - 2, top + 4.5, {
+        align: 'right'
+      });
+      doc.text(lines, margin + 2, top + 9);
+      y = top + blockH2 + 4;
+    });
   }
   if ((report.documents || []).length) {
     ensure(10);
@@ -2539,6 +2603,227 @@ function ObsForm({
     }
   }));
 }
+function GeneralObsForm({
+  onSubmit,
+  editing,
+  onCancelEdit,
+  notify
+}) {
+  const empty = {
+    category: 'General',
+    text: ''
+  };
+  const [d, setD] = useState(empty);
+  const [listening, setListening] = useState(false);
+  const recRef = useRef(null);
+  useEffect(() => {
+    setD(editing ? {
+      ...empty,
+      ...editing
+    } : empty);
+  }, [editing]);
+  const toggleMic = () => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) return notify('Voice dictation is not supported in this browser (try Chrome).', 'error');
+    if (listening) {
+      try {
+        recRef.current && recRef.current.stop();
+      } catch (e) {}
+      return;
+    }
+    let rec;
+    try {
+      rec = new SR();
+    } catch (e) {
+      return notify('Could not start dictation: ' + e.message, 'error');
+    }
+    rec.lang = 'en-GB';
+    rec.interimResults = false;
+    rec.continuous = true;
+    rec.onresult = e => {
+      let t = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        if (e.results[i].isFinal) t += e.results[i][0].transcript;
+      }
+      if (t) setD(x => ({
+        ...x,
+        text: (x.text ? x.text + ' ' : '') + t.trim()
+      }));
+    };
+    rec.onerror = e => {
+      setListening(false);
+      const m = {
+        'not-allowed': 'Microphone permission denied.',
+        'service-not-allowed': 'Microphone permission denied.',
+        'no-speech': 'No speech detected.',
+        'audio-capture': 'No microphone found.'
+      }[e.error] || e.error;
+      notify('Dictation error: ' + m, 'error');
+    };
+    rec.onend = () => setListening(false);
+    recRef.current = rec;
+    try {
+      rec.start();
+      setListening(true);
+    } catch (e) {
+      notify('Could not start dictation: ' + e.message, 'error');
+    }
+  };
+  const submit = () => {
+    if (!d.text.trim()) return notify('Add some text before saving the observation.', 'error');
+    onSubmit({
+      ...d,
+      id: editing ? editing.id : uid(),
+      createdAt: editing ? editing.createdAt : Date.now()
+    });
+    setD(empty);
+  };
+  return React.createElement("div", {
+    className: "no-print",
+    style: {
+      background: 'var(--panel)',
+      border: '1px solid var(--line)',
+      borderRadius: 10,
+      padding: 14
+    }
+  }, React.createElement("div", {
+    className: "font-head",
+    style: {
+      fontSize: 18,
+      marginBottom: 10
+    }
+  }, editing ? 'Edit general observation' : 'New general observation'), React.createElement("label", {
+    style: {
+      fontSize: 12,
+      opacity: .7
+    }
+  }, "Category"), React.createElement("select", {
+    className: "field",
+    value: d.category,
+    onChange: e => setD(x => ({
+      ...x,
+      category: e.target.value
+    })),
+    style: {
+      marginTop: 4,
+      marginBottom: 10
+    }
+  }, OBS_CATEGORIES.map(c => React.createElement("option", {
+    key: c,
+    value: c
+  }, c))), React.createElement("div", {
+    style: {
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center'
+    }
+  }, React.createElement("label", {
+    style: {
+      fontSize: 12,
+      opacity: .7
+    }
+  }, "Observation"), React.createElement("button", {
+    onClick: toggleMic,
+    className: 'btn' + (listening ? ' listening' : ''),
+    style: listening ? {
+      background: '#3a1c1c',
+      borderColor: '#ef4444',
+      color: '#ffb4b4'
+    } : null
+  }, listening ? 'Stop' : 'Dictate')), React.createElement("textarea", {
+    className: "field",
+    rows: "3",
+    value: d.text,
+    onChange: e => setD(x => ({
+      ...x,
+      text: e.target.value
+    })),
+    placeholder: "General site note that doesn't need a photo — e.g. progress, access, weather, housekeeping",
+    style: {
+      marginTop: 4
+    }
+  }), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      marginTop: 12
+    }
+  }, React.createElement("button", {
+    className: "btn btn-vis",
+    onClick: submit
+  }, editing ? 'Update observation' : 'Add observation'), editing && React.createElement("button", {
+    className: "btn",
+    onClick: onCancelEdit
+  }, "Cancel edit")));
+}
+function GeneralObsCard({
+  obs,
+  n,
+  onEdit,
+  onDelete
+}) {
+  return React.createElement("div", {
+    style: {
+      background: 'var(--panel)',
+      border: '1px solid var(--line)',
+      borderRadius: 8,
+      padding: 12
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      justifyContent: 'space-between',
+      gap: 8,
+      alignItems: 'flex-start'
+    }
+  }, React.createElement("div", null, React.createElement("span", {
+    className: "font-head",
+    style: {
+      fontSize: 16,
+      marginRight: 8
+    }
+  }, "#", n), React.createElement("span", {
+    style: {
+      fontSize: 12,
+      fontWeight: 700,
+      color: '#38bdf8',
+      background: '#0d2a3a',
+      padding: '2px 8px',
+      borderRadius: 999
+    }
+  }, obs.category || 'General'), React.createElement("span", {
+    style: {
+      fontSize: 11,
+      opacity: .55,
+      marginLeft: 8
+    }
+  }, fmtDT(obs.createdAt))), React.createElement("div", {
+    className: "no-print",
+    style: {
+      display: 'flex',
+      gap: 6
+    }
+  }, React.createElement("button", {
+    className: "btn",
+    style: {
+      padding: '.35rem .6rem'
+    },
+    onClick: onEdit
+  }, "Edit"), React.createElement("button", {
+    className: "btn btn-danger",
+    style: {
+      padding: '.35rem .6rem'
+    },
+    onClick: onDelete
+  }, "Delete"))), React.createElement("div", {
+    style: {
+      fontSize: 13,
+      marginTop: 8,
+      whiteSpace: 'pre-wrap',
+      lineHeight: 1.5
+    }
+  }, obs.text || '—'));
+}
 function PrintReport({
   report,
   staticMap
@@ -2582,7 +2867,7 @@ function PrintReport({
       fontSize: 28,
       margin: '0 0 2px'
     }
-  }, "SITE INSPECTION & SNAG REPORT"), React.createElement("div", {
+  }, "SITE INSPECTION & WEEKLY REPORT"), React.createElement("div", {
     style: {
       fontSize: 12,
       marginBottom: 10
@@ -2594,7 +2879,32 @@ function PrintReport({
     }
   }, React.createElement("tbody", null, React.createElement("tr", null, React.createElement("th", null, "Project"), React.createElement("td", null, m.projectName || '—'), React.createElement("th", null, "Date"), React.createElement("td", null, m.date || '—')), React.createElement("tr", null, React.createElement("th", null, "Inspector"), React.createElement("td", null, m.inspector || '—'), React.createElement("th", null, "Contractor"), React.createElement("td", null, m.contractor || '—')), React.createElement("tr", null, React.createElement("th", null, "Client"), React.createElement("td", {
     colSpan: 3
-  }, m.client || '—')))), React.createElement("h3", {
+  }, m.client || '—')))), (() => {
+    const sc = summaryCounts(report);
+    const parts = [sc.total + ' observation' + (sc.total === 1 ? '' : 's')].concat(sc.counts.map(c => c.label + ': ' + c.n));
+    if (sc.generalTotal) parts.push(sc.generalTotal + ' general note' + (sc.generalTotal === 1 ? '' : 's'));
+    return React.createElement("div", {
+      style: {
+        marginBottom: 12
+      }
+    }, React.createElement("h3", {
+      className: "font-head",
+      style: {
+        fontSize: 15,
+        margin: '0 0 4px'
+      }
+    }, "Summary"), React.createElement("div", {
+      style: {
+        fontSize: 11,
+        marginBottom: report.summaryNote && report.summaryNote.trim() ? 6 : 0
+      }
+    }, parts.join('  ·  ')), report.summaryNote && report.summaryNote.trim() && React.createElement("div", {
+      style: {
+        fontSize: 11,
+        whiteSpace: 'pre-wrap'
+      }
+    }, report.summaryNote.trim()));
+  })(), React.createElement("h3", {
     className: "font-head",
     style: {
       fontSize: 15,
@@ -2667,7 +2977,34 @@ function PrintReport({
       src: p,
       alt: ""
     })))));
-  }), (report.documents || []).length > 0 && React.createElement("div", {
+  }), (report.generalObservations || []).length > 0 && React.createElement("div", {
+    style: {
+      marginTop: 14
+    }
+  }, React.createElement("h3", {
+    className: "font-head",
+    style: {
+      fontSize: 15,
+      margin: '0 0 6px'
+    }
+  }, "General observations (", report.generalObservations.length, ")"), report.generalObservations.map((o, i) => React.createElement("div", {
+    className: "pr-snag",
+    key: o.id
+  }, React.createElement("div", {
+    className: "pr-snag-head"
+  }, "#", i + 1, " \xA0 ", React.createElement("span", {
+    className: "sev-chip",
+    style: {
+      border: '1px solid',
+      padding: '1px 6px',
+      fontSize: 11
+    }
+  }, o.category || 'General'), " \xA0 ", fmtDT(o.createdAt)), React.createElement("div", {
+    className: "pr-snag-body",
+    style: {
+      whiteSpace: 'pre-wrap'
+    }
+  }, o.text || '')))), (report.documents || []).length > 0 && React.createElement("div", {
     style: {
       marginTop: 14
     }
@@ -2714,6 +3051,7 @@ function App() {
   const [reports, setReports] = useState([]);
   const [activeId, setActiveId] = useState(null);
   const [editing, setEditing] = useState(null);
+  const [editingGeneral, setEditingGeneral] = useState(null);
   const [ready, setReady] = useState(false);
   const [dbOk, setDbOk] = useState(true);
   const [pdfBusy, setPdfBusy] = useState(false);
@@ -2778,6 +3116,26 @@ function App() {
       observations: r.observations.filter(x => x.id !== id)
     }));
   };
+  const addGeneralObs = o => {
+    patchActive(r => ({
+      ...r,
+      generalObservations: editingGeneral ? (r.generalObservations || []).map(x => x.id === o.id ? o : x) : [...(r.generalObservations || []), o]
+    }));
+    setEditingGeneral(null);
+    notify(editingGeneral ? 'General observation updated.' : 'General observation added.', 'ok');
+  };
+  const delGeneralObs = id => {
+    if (!confirm('Delete this general observation?')) return;
+    patchActive(r => ({
+      ...r,
+      generalObservations: (r.generalObservations || []).filter(x => x.id !== id)
+    }));
+    if (editingGeneral && editingGeneral.id === id) setEditingGeneral(null);
+  };
+  const setSummaryNote = v => patchActive(r => ({
+    ...r,
+    summaryNote: v
+  }));
   const setLocality = loc => patchActive(r => ({
     ...r,
     locality: loc
@@ -2870,7 +3228,7 @@ function App() {
       const doc = await buildPDF(active, notify);
       if (doc) {
         const blob = doc.output('blob');
-        await saveFile((active.meta.projectName || 'snag-report').replace(/[^\w-]+/g, '_') + '.pdf', blob, notify);
+        await saveFile((active.meta.projectName || 'weekly-report').replace(/[^\w-]+/g, '_') + '.pdf', blob, notify);
       }
     } catch (e) {
       notify('PDF export failed: ' + e.message, 'error');
@@ -2890,7 +3248,7 @@ function App() {
     setTimeout(() => window.print(), 60);
   };
   const backup = () => {
-    saveFile('snag-backup-' + todayISO() + '.json', new Blob([JSON.stringify(reports, null, 2)], {
+    saveFile('weekly-report-backup-' + todayISO() + '.json', new Blob([JSON.stringify(reports, null, 2)], {
       type: 'application/json'
     }), notify);
   };
@@ -2966,16 +3324,16 @@ function App() {
       margin: 0,
       lineHeight: 1
     }
-  }, "SNAG", React.createElement("span", {
+  }, "SITE", React.createElement("span", {
     style: {
       color: 'var(--vis)'
     }
-  }, "LOG")), React.createElement("div", {
+  }, "REPORT")), React.createElement("div", {
     style: {
       fontSize: 12,
       opacity: .6
     }
-  }, "Site inspection & defect register"))), React.createElement("div", {
+  }, "Site inspection & weekly reporting"))), React.createElement("div", {
     style: {
       display: 'flex',
       gap: 6,
@@ -3087,6 +3445,58 @@ function App() {
     value: m.date,
     onChange: e => setMeta('date', e.target.value)
   })))), React.createElement("section", {
+    style: {
+      background: 'var(--panel)',
+      border: '1px solid var(--line)',
+      borderRadius: 10,
+      padding: 14,
+      marginBottom: 14
+    }
+  }, React.createElement("div", {
+    className: "font-head",
+    style: {
+      fontSize: 20,
+      marginBottom: 4
+    }
+  }, "Summary"), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      opacity: .55,
+      marginBottom: 8
+    }
+  }, "Auto-updates as you log observations. Add an overview for the weekly report if you'd like one."), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6,
+      flexWrap: 'wrap',
+      marginBottom: 10
+    }
+  }, [['Total', summaryCounts(active).total]].concat(summaryCounts(active).counts.map(c => [c.label, c.n])).concat([['General notes', summaryCounts(active).generalTotal]]).map(([label, n]) => React.createElement("span", {
+    key: label,
+    style: {
+      fontSize: 11,
+      fontWeight: 700,
+      color: '#e6eaef',
+      background: '#12161b',
+      border: '1px solid var(--line)',
+      padding: '2px 8px',
+      borderRadius: 999
+    }
+  }, label, ": ", n))), React.createElement("label", {
+    style: {
+      fontSize: 12,
+      opacity: .7
+    }
+  }, "Overview (optional)"), React.createElement("textarea", {
+    className: "field",
+    rows: "3",
+    value: active.summaryNote || '',
+    onChange: e => setSummaryNote(e.target.value),
+    placeholder: "Overall summary for this report — e.g. progress, key risks, overall condition",
+    style: {
+      marginTop: 4
+    }
+  })), React.createElement("section", {
     style: {
       background: 'var(--panel)',
       border: '1px solid var(--line)',
@@ -3327,6 +3737,51 @@ function App() {
       });
     },
     onDelete: () => delObs(o.id)
+  })))), React.createElement("section", {
+    style: {
+      marginTop: 14
+    }
+  }, React.createElement("div", {
+    className: "font-head",
+    style: {
+      fontSize: 20,
+      marginBottom: 4
+    }
+  }, "General observations (", (active.generalObservations || []).length, ")"), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      opacity: .55,
+      marginBottom: 10
+    }
+  }, "Notes that don't relate to a specific defect and don't need a photo — progress, access, weather, housekeeping, etc."), React.createElement(GeneralObsForm, {
+    onSubmit: addGeneralObs,
+    editing: editingGeneral,
+    onCancelEdit: () => setEditingGeneral(null),
+    notify: notify
+  }), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 10,
+      marginTop: 14
+    }
+  }, (active.generalObservations || []).length === 0 && React.createElement("div", {
+    style: {
+      opacity: .6,
+      fontSize: 13
+    }
+  }, "Nothing logged yet."), (active.generalObservations || []).map((o, i) => React.createElement(GeneralObsCard, {
+    key: o.id,
+    obs: o,
+    n: i + 1,
+    onEdit: () => {
+      setEditingGeneral(o);
+      window.scrollTo({
+        top: 0,
+        behavior: 'smooth'
+      });
+    },
+    onDelete: () => delGeneralObs(o.id)
   }))))), React.createElement(PrintReport, {
     report: active,
     staticMap: printMap
